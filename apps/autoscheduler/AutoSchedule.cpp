@@ -870,6 +870,12 @@ private:
         }
     };
 
+    struct CompareIdx {
+        bool operator()(const int &a, const int &b) const {
+            return a > b;
+        }
+    };
+
     std::vector<IntrusivePtr<State>> storage;
     size_t sz = 0;
 
@@ -914,6 +920,68 @@ public:
 
     void resort() {
         std::make_heap(storage.begin(), storage.begin() + sz, CompareStates{});
+    }
+
+    // Resort the queue based on a probabilistic model
+    void prob_resort() {
+        // get prob of each     
+        // instead of using current cost model, we should use Q(s,a) model or V(s) model
+        // store the cost model somewhere else
+        vector<double> inv_cost_vec;
+        vector<int> idx;
+        std::cout << "cost/inv_cost: ";
+        for (size_t i = 0; i < sz; i++) {
+            IntrusivePtr<State> s_ptr = storage[i];
+            std::cout << s_ptr->cost;
+            internal_assert(s_ptr->cost > 0);
+            double inv_cost = 1 / s_ptr-> cost;
+            inv_cost_vec.push_back(inv_cost);
+            std::cout << "/" << inv_cost
+                 << ", ";
+            idx.push_back(i);
+        }
+        std::cout << std::endl;
+
+        // draw without resample from the state 
+        std::random_device rd;
+        std::mt19937 g(rd());
+        //std::shuffle(storage.begin(), storage.end(), g);
+        
+        vector<int> sort_idx;
+        while(!idx.empty()) {
+
+            double total_inv_cost = accumulate(inv_cost_vec.begin(), inv_cost_vec.end(), 0);  
+
+            // construct prob vec based on the inverse cost model
+            vector<double> prob_vec;
+            for (auto it= inv_cost_vec.begin(); it != inv_cost_vec.end(); ++it){
+                prob_vec.push_back((*it / total_inv_cost) * 100);
+            }
+
+            // construct discrete_distribution
+            std::discrete_distribution<int> dist(prob_vec.begin(), prob_vec.end());
+            int drawn_idx = dist(g);
+            
+
+            // add drawn idx to sort_idx 
+            int idx_val = idx[drawn_idx];   
+            idx.erase(idx.begin() + drawn_idx);
+            inv_cost_vec.erase(inv_cost_vec.begin() + drawn_idx);
+            sort_idx.push_back(idx_val);
+        }
+        // dist(g) should sample from the prob but
+        //std::sample(in.begin(), in.end(), std::back_inserter(out),
+        //                      5, std::mt19937{std::random_device{}()});   
+        std::vector<IntrusivePtr<State>> storage_copy(storage);
+
+        std::cout << "cost/idx: ";
+        for (size_t i = 0; i < sz; i++) {
+            std::cout << storage_copy[sort_idx[i]] -> cost;
+            storage[i] = storage_copy[sort_idx[i]];
+            std::cout << "/" << sort_idx[i]
+                 << ", ";
+        }
+        std::cout << std::endl;
     }
 
     void clear() {
@@ -984,7 +1052,8 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
     // This loop is beam search over the sequence of decisions to make.
     for (int i = 0;; i++) {
         std::unordered_map<uint64_t, int> hashes;
-        q.swap(pending);
+        q.swap(pending); // queue into pending 
+
 
         if (pending.empty()) {
             if ((false) && beam_size < 1000) {  // Intentional dead code. Extra parens to pacify clang-tidy.
@@ -1096,7 +1165,8 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
         if (cost_model) {
             // Now evaluate all the costs and re-sort them in the priority queue
             cost_model->evaluate_costs();
-            q.resort();
+            //q.resort();
+            q.prob_resort();
         }
 
         if (cyos_str == "1") {
@@ -1114,6 +1184,7 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
             cost_model->evaluate_costs();
 
             // Select next partial schedule to expand.
+            // cin user selected node
             int selection = -1;
             while (selection < 0 || selection >= (int)q.size()) {
                 aslog(0) << "\nEnter selection: ";
