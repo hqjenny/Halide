@@ -172,7 +172,7 @@ echo Retraining model...
 find ${SAMPLES} -name "*.sample" | \
     ${AUTOSCHED_BIN}/retrain_cost_model \
         --epochs=50 \
-        --rates="0.0001" \
+        --rates="0.001" \
         --num_cores=$LOCAL_CORES \
         --randomize_weights=1 \
         --weights_out=${WEIGHTS} \
