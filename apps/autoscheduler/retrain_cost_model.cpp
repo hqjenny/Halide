@@ -52,6 +52,7 @@ struct Flags {
         a.parse_check(argc, argv);  // exits if parsing fails
 
         epochs = a.get<int>("epochs");
+        num_cores = a.get<int>("num_cores");
         rates = parse_floats(a.get<string>("rates"));
         initial_weights_path = a.get<string>("initial_weights");
         weights_out_path = a.get<string>("weights_out");
