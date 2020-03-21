@@ -166,75 +166,19 @@ echo Local number of cores detected as ${LOCAL_CORES}
 
 NUM_BATCHES=1
 
-for ((BATCH_ID=$((FIRST+1));BATCH_ID<$((FIRST+1+NUM_BATCHES));BATCH_ID++)); do
+# retrain model weights on all samples seen so far
+echo Retraining model...
 
-    SECONDS=0
+find ${SAMPLES} -name "*.sample" | \
+    ${AUTOSCHED_BIN}/retrain_cost_model \
+        --epochs=50 \
+        --rates="0.0001" \
+        --num_cores=$LOCAL_CORES \
+        --randomize_weights=1 \
+        --weights_out=${WEIGHTS} \
+        --best_benchmark=${SAMPLES}/best.${PIPELINE}.benchmark.txt \
+        --best_schedule=${SAMPLES}/best.${PIPELINE}.schedule.h
 
-    for ((EXTRA_ARGS_IDX=0;EXTRA_ARGS_IDX<${#GENERATOR_ARGS_SETS_ARRAY[@]};EXTRA_ARGS_IDX++)); do
+        # --epochs=${BATCH_SIZE}
+        # --initial_weights=${WEIGHTS}
 
-        # Compile a batch of samples using the generator in parallel
-        DIR=${SAMPLES}/batch_${BATCH_ID}_${EXTRA_ARGS_IDX}
-
-        # Copy the weights being used into the batch folder so that we can repro failures
-        mkdir -p ${DIR}/
-        cp ${WEIGHTS} ${DIR}/used.weights
-
-        EXTRA_GENERATOR_ARGS=${GENERATOR_ARGS_SETS_ARRAY[EXTRA_ARGS_IDX]/;/ }
-        if [ ! -z "${EXTRA_GENERATOR_ARGS}" ]; then
-            echo "Adding extra generator args (${EXTRA_GENERATOR_ARGS}) for batch_${BATCH_ID}"
-        fi
-
-        echo ${EXTRA_GENERATOR_ARGS} > ${DIR}/extra_generator_args.txt
-
-        # Do parallel compilation in batches, so that machines with fewer than BATCH_SIZE cores
-        # don't get swamped and timeout unnecessarily
-        echo -n Compiling ${BATCH_SIZE} samples
-        for ((SAMPLE_ID=0;SAMPLE_ID<${BATCH_SIZE};SAMPLE_ID++)); do
-            while [[ 1 ]]; do
-                RUNNING=$(jobs -r | wc -l)
-                if [[ RUNNING -ge LOCAL_CORES ]]; then
-                    sleep 1
-                else
-                    break
-                fi
-            done
-
-            S=$(printf "%04d%04d" $BATCH_ID $SAMPLE_ID)
-            FNAME=$(printf "%s_batch_%04d_sample_%04d" ${PIPELINE} $BATCH_ID $SAMPLE_ID)
-            make_featurization "${DIR}/${SAMPLE_ID}" $S $FNAME "$EXTRA_GENERATOR_ARGS" &
-            echo -n .
-        done
-        wait
-        echo  done.
-
-        # benchmark them serially using rungen
-        for ((SAMPLE_ID=0;SAMPLE_ID<${BATCH_SIZE};SAMPLE_ID++)); do
-            S=$(printf "%04d%04d" $BATCH_ID $SAMPLE_ID)
-            FNAME=$(printf "%s_batch_%04d_sample_%04d" ${PIPELINE} $BATCH_ID $SAMPLE_ID)
-            benchmark_sample "${DIR}/${SAMPLE_ID}" $S $EXTRA_ARGS_IDX $FNAME
-        done
-
-        # retrain model weights on all samples seen so far
-        echo Retraining model...
-
-        # find ${SAMPLES} -name "*.sample" > samples.tmp.txt
-        # echo --epochs=${BATCH_SIZE} --rates="0.0001" --num_cores=32 --initial_weights=${WEIGHTS} --weights_out=${WEIGHTS} --best_benchmark=${SAMPLES}/best.${PIPELINE}.benchmark.txt --best_schedule=${SAMPLES}/best.${PIPELINE}.schedule.h
-        # gdb ${AUTOSCHED_BIN}/retrain_cost_model
-
-        find ${SAMPLES} -name "*.sample" > samples.tmp.txt
-        find ${SAMPLES} -name "*.sample" | \
-            ${AUTOSCHED_BIN}/retrain_cost_model \
-                --epochs=0 \
-                --rates="0.0001" \
-                --num_cores=$LOCAL_CORES \
-                --randomize_weights=1 \
-                --weights_out=${WEIGHTS} \
-                --best_benchmark=${SAMPLES}/best.${PIPELINE}.benchmark.txt \
-                --best_schedule=${SAMPLES}/best.${PIPELINE}.schedule.h
-
-                # --epochs=${BATCH_SIZE}
-                # --initial_weights=${WEIGHTS}
-    done
-
-    echo Batch ${BATCH_ID} took ${SECONDS} seconds to compile, benchmark, and retrain
-done

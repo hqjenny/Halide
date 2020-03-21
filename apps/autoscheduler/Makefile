@@ -6,7 +6,7 @@ include ../support/autoscheduler.inc
 # autoscheduler can't find the libHalide symbols that it needs.
 $(GENERATOR_BIN)/demo.generator: demo_generator.cpp $(GENERATOR_DEPS)
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(USE_EXPORT_DYNAMIC) -g $(filter %.cpp,$^) -o $@ $(GENERATOR_LDFLAGS)
+	$(CXX) $(CXXFLAGS) -Wno-deprecated-declarations $(USE_EXPORT_DYNAMIC) -g $(filter %.cpp,$^) -o $@ $(GENERATOR_LDFLAGS)
 
 # To use the autoscheduler, set a few environment variables and use the -p flag to the generator to load the autoscheduler as a plugin
 $(BIN)/%/demo.a: $(GENERATOR_BIN)/demo.generator $(AUTOSCHED_BIN)/libauto_schedule.so

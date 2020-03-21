@@ -59,14 +59,20 @@ struct Flags {
         best_benchmark_path = a.get<string>("best_benchmark");
         best_schedule_path = a.get<string>("best_schedule");
 
-        if (epochs <= 0) {
-            std::cerr << "--epochs must be specified and > 0.\n";
+        // if (epochs <= 0) {
+        if (epochs < 0) {
+            // std::cerr << "--epochs must be specified and > 0.\n";
+            std::cerr << "--epochs must be specified and >= 0.\n";
             std::cerr << a.usage();
             exit(1);
         }
         if ((!initial_weights_path.empty()) == randomize_weights) {
             std::cerr << "You must specify exactly one of --initial_weights or --randomize_weights.\n";
             std::cerr << a.usage();
+
+            std::cout << "randomize: " << randomize_weights << "\n";
+            std::cout << "initial: " << initial_weights_path << " (" << initial_weights_path.size() << ")\n";
+
             exit(1);
         }
         if (weights_out_path.empty()) {
@@ -174,6 +180,9 @@ map<int, PipelineSample> load_samples(const Flags &flags) {
             std::cout << "Skipping file: " << s << "\n";
             continue;
         }
+
+        std::cout << "Reading file " << s << "(num_read = " << num_read << ") (num_unique = " << num_unique << ")\n";
+
         std::ifstream file(s);
         file.read((char *)(scratch.data()), scratch.size() * sizeof(float));
         const size_t floats_read = file.gcount() / sizeof(float);
@@ -381,6 +390,7 @@ int main(int argc, char **argv) {
 
     std::cout << "Iterating over " << samples.size() << " samples using seed = " << seed << "\n";
     decltype(samples) validation_set;
+
     uint64_t unique_schedules = 0;
     if (samples.size() > 16) {
         for (auto p : samples) {
@@ -402,6 +412,17 @@ int main(int argc, char **argv) {
     }
 
     std::cout << "Number of unique schedules: " << unique_schedules << "\n";
+
+    uint64_t hasan_unique_schedules = 0;
+    uint64_t hasan_unique_runtimes = 0;
+    for (auto p : samples) {
+        hasan_unique_schedules += p.second.schedules.size();
+        for (auto s : p.second.schedules) {
+            hasan_unique_runtimes += s.second.runtimes.size();
+        }
+    }
+    std::cout << "(Hasan) Number of unique schedules: " << hasan_unique_schedules << "\n";
+    std::cout << "(Hasan) Number of unique runtimes: " << hasan_unique_runtimes << "\n";
 
     for (float learning_rate : flags.rates) {
         float loss_sum[kModels] = {0}, loss_sum_counter[kModels] = {0};
@@ -586,7 +607,14 @@ int main(int argc, char **argv) {
         }
     }
 
-    // tpp.save_weights();
+    if (flags.epochs == 0) {
+        if (kModels != 1) {
+            std::cerr << "too many models\n";
+            return 1;
+        }
+
+        tpp[0]->save_weights();
+    }
 
     return 0;
 }
