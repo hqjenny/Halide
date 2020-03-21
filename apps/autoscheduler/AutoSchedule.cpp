@@ -334,6 +334,46 @@ struct State {
 
         cost = 0;
 
+        // Hasan begin
+        if (verbose) {
+            for (const auto &n : dag.nodes) {
+                auto sched_feat = vector<ScheduleFeatures>();
+
+                for (const auto& f : features) {
+                    const auto& stage = *f.first;
+                    const auto& feat = f.second;
+                    if (stage.node == &n) {
+                        sched_feat.push_back(feat);
+                    }
+                }
+
+                if (sched_feat.size() < n.stages.size()) {
+                    // This Func hasn't been scheduled yet.
+                    break;
+                }
+
+                for (size_t stage_idx = n.stages.size(); stage_idx > 0; stage_idx--) {
+                    const auto &s = n.stages[stage_idx - 1];
+                    debug(0) << "YYY ";
+                    debug(0) << n.func.name() << ' ' << (stage_idx - 1) << ' ';
+                    const int64_t *sched_stats = (const int64_t *)(&sched_feat[stage_idx - 1]);
+                    for (size_t i = 0; i < sizeof(ScheduleFeatures) / sizeof(int64_t); i++) {
+                        // The schedule-based features are all
+                        // naturally multiplicative and have a very
+                        // large dynamic range, so we emit them
+                        // logged
+                        debug(0) << std::log(1 + sched_stats[i]) << ' ';
+                    }
+                    const int *stats = (const int *)(&s.features);
+                    for (size_t i = 0; i < sizeof(s.features) / sizeof(int); i++) {
+                        debug(0) << stats[i] << ' ';
+                    }
+                    debug(0) << '\n';
+                }
+            }
+        }
+        // Hasan end
+
         if (verbose) {
             for (auto it = features.begin(); it != features.end(); it++) {
                 auto &stage = *(it.key());
@@ -706,6 +746,12 @@ struct State {
 
     void dump() const {
         aslog(0) << "State with cost " << cost << ":\n";
+        root->dump("", nullptr);
+        aslog(0) << schedule_source;
+    }
+
+    void debug_dump() const {
+        aslog(0) << "Optimal state with cost " << cost << ":\n";
         root->dump("", nullptr);
         aslog(0) << schedule_source;
     }
@@ -1313,6 +1359,7 @@ void generate_schedule(const std::vector<Function> &outputs,
 
     // Dump the schedule found
     aslog(1) << "** Optimal schedule:\n";
+    optimal->debug_dump();
 
     // Just to get the debugging prints to fire
     optimal->calculate_cost(dag, params, cost_model.get(), aslog::aslog_level() > 0);

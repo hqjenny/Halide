@@ -144,6 +144,7 @@ benchmark_sample() {
         ${D}/bench \
         --estimate_all \
         --benchmarks=all \
+        --output_extents=[1900,2000,3] input=zero:[2000,2000,3] \
             | tee ${D}/bench.txt || echo "Benchmarking failed or timed out for ${D}"
 
     # Add the runtime, pipeline id, and schedule id to the feature file
@@ -164,7 +165,7 @@ else
 fi
 echo Local number of cores detected as ${LOCAL_CORES}
 
-NUM_BATCHES=1
+NUM_BATCHES=10
 
 for ((BATCH_ID=$((FIRST+1));BATCH_ID<$((FIRST+1+NUM_BATCHES));BATCH_ID++)); do
 
@@ -217,24 +218,9 @@ for ((BATCH_ID=$((FIRST+1));BATCH_ID<$((FIRST+1+NUM_BATCHES));BATCH_ID++)); do
         # retrain model weights on all samples seen so far
         echo Retraining model...
 
-        # find ${SAMPLES} -name "*.sample" > samples.tmp.txt
-        # echo --epochs=${BATCH_SIZE} --rates="0.0001" --num_cores=32 --initial_weights=${WEIGHTS} --weights_out=${WEIGHTS} --best_benchmark=${SAMPLES}/best.${PIPELINE}.benchmark.txt --best_schedule=${SAMPLES}/best.${PIPELINE}.schedule.h
-        # gdb ${AUTOSCHED_BIN}/retrain_cost_model
-
-        find ${SAMPLES} -name "*.sample" > samples.tmp.txt
-        find ${SAMPLES} -name "*.sample" | \
-            ${AUTOSCHED_BIN}/retrain_cost_model \
-                --epochs=0 \
-                --rates="0.0001" \
-                --num_cores=$LOCAL_CORES \
-                --randomize_weights=1 \
-                --weights_out=${WEIGHTS} \
-                --best_benchmark=${SAMPLES}/best.${PIPELINE}.benchmark.txt \
-                --best_schedule=${SAMPLES}/best.${PIPELINE}.schedule.h
-
-                # --epochs=${BATCH_SIZE}
-                # --initial_weights=${WEIGHTS}
+        find ${SAMPLES} -name "*.sample" >> samples.all.txt
     done
 
     echo Batch ${BATCH_ID} took ${SECONDS} seconds to compile, benchmark, and retrain
 done
+
