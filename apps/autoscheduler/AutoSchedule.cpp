@@ -183,6 +183,7 @@ struct State {
 
     static int cost_calculations;
 
+    // generate a hash for the current state
     uint64_t structural_hash(int depth) const {
         uint64_t h = num_decisions_made;
         internal_assert(root.defined());
@@ -233,10 +234,16 @@ struct State {
     }
 
     void compute_featurization(const FunctionDAG &dag, const MachineParams &params, StageMap<ScheduleFeatures> *features) {
+        
         StageMap<LoopNest::Sites> sites;
+        // init hash with max_id 
         sites.make_large(dag.nodes[0].stages[0].max_id);
         features->make_large(dag.nodes[0].stages[0].max_id);
+
+        // root is a LoopNest
         internal_assert(root.defined());
+
+        // Compute all the sites of interest for each pipeline stage
         root->get_sites(sites);
 
         // For the input nodes and unscheduled outputs, the compute
@@ -302,6 +309,7 @@ struct State {
     }
 
     void save_featurization(const FunctionDAG &dag, const MachineParams &params, std::ostream &out) {
+        // StageMap=PerfectHashMap<FunctionDAG::Node::Stage, T>;
         StageMap<ScheduleFeatures> features;
         compute_featurization(dag, params, &features);
 
@@ -432,13 +440,16 @@ struct State {
                            std::function<void(IntrusivePtr<State> &&)> &accept_child) const {
         internal_assert(root.defined() && root->is_root());
 
+        // Terminating the run, if num_decisions_made is two times the DAG nodes size 
         if (num_decisions_made == 2 * (int)dag.nodes.size()) {
             return;
         }
 
+        // JENNY why next_node is /2? 
         int next_node = num_decisions_made / 2;
         int phase = num_decisions_made % 2;
 
+        // JENNY older search space may_subtile == False 
         if (!may_subtile()) {
             // When emulating the older search space, we do all
             // parallelizing last, so that it is independent of the
@@ -460,12 +471,18 @@ struct State {
             // and there are no other decisions to be made about them
             // at this time.
             // aslog(0) << "Skipping over scheduling input node: " << node->func.name() << "\n";
+            // JENNY init cost from parent state 
             auto child = make_child();
+            // child's num_decisions_made is parent's num_decisions_made + 1
             child->num_decisions_made++;
+            // accept_child is enqueue_new_children
+            // calles q.emplace(std::move(s));
             accept_child(std::move(child));
             return;
         }
 
+        // if there is outgoing_edges and 
+        // see if this loop nest access the given Func which is the node
         if (!node->outgoing_edges.empty() && !root->calls(node)) {
             aslog(0) << "In state:\n";
             dump();
@@ -493,6 +510,7 @@ struct State {
                     new_root->inline_func(node);
                     child->root = new_root;
                     child->num_decisions_made++;
+                    // if cost is too high, not fork the children
                     if (child->calculate_cost(dag, params, cost_model)) {
                         num_children++;
                         accept_child(std::move(child));
@@ -975,18 +993,18 @@ public:
         // store the cost model somewhere else
         vector<double> inv_cost_vec;
         vector<int> idx;
-        std::cout << "cost/inv_cost: ";
+        //std::cout << "cost/inv_cost: ";
         for (size_t i = 0; i < sz; i++) {
             IntrusivePtr<State> s_ptr = storage[i];
-            std::cout << s_ptr->cost;
+            //std::cout << s_ptr->cost;
             internal_assert(s_ptr->cost > 0);
             double inv_cost = 1 / s_ptr-> cost;
             inv_cost_vec.push_back(inv_cost);
-            std::cout << "/" << inv_cost
-                 << ", ";
+            //std::cout << "/" << inv_cost
+            //     << ", ";
             idx.push_back(i);
         }
-        std::cout << std::endl;
+        //std::cout << std::endl;
 
         // draw without resample from the state 
         std::random_device rd;
@@ -1020,14 +1038,14 @@ public:
         //                      5, std::mt19937{std::random_device{}()});   
         std::vector<IntrusivePtr<State>> storage_copy(storage);
 
-        std::cout << "cost/idx: ";
+        //std::cout << "cost/idx: ";
         for (size_t i = 0; i < sz; i++) {
-            std::cout << storage_copy[sort_idx[i]] -> cost;
+            //std::cout << storage_copy[sort_idx[i]] -> cost;
             storage[i] = storage_copy[sort_idx[i]];
-            std::cout << "/" << sort_idx[i]
-                 << ", ";
+            //std::cout << "/" << sort_idx[i]
+            //     << ", ";
         }
-        std::cout << std::endl;
+        ///std::cout << std::endl;
     }
 
     void clear() {
@@ -1063,6 +1081,9 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
     }
 
     StateQueue q, pending;
+
+    // JENNY construct map 
+    std::unordered_map<const State*, double> min_child_cost; 
 
     // The initial state, with no decisions made
     {
@@ -1126,6 +1147,7 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
         }
 
         expanded = 0;
+        // Beam search
         while (expanded < beam_size && !pending.empty()) {
 
             IntrusivePtr<State> state{pending.pop()};
@@ -1143,6 +1165,7 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                     // to how many states we've already seen with that
                     // hash.
                     int penalty = ++hashes[h1];
+                    // permitted_hashes stores the hash of good parent states, see line 1211
                     if (pass_idx > 0 && !permitted_hashes.count(h0)) {
                         // It's possible to get yourself into a state
                         // where the only things in the beam that match
@@ -1187,12 +1210,30 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                     int blessed = 0;
                     while (state->cost <= 1.2 * best->cost && blessed < beam_size) {
                         const State *s = state.get();
+                        double best_child_cost = s->cost;
                         while (s) {
                             uint64_t h1 = s->structural_hash(pass_idx);
                             permitted_hashes.insert(h1);
                             s = s->parent.get();
+                            if (s != NULL) {
+                                double parent_cost = s->cost;
+                                double min_cost = parent_cost; 
+                                if (min_cost > best_child_cost) {
+                                    min_cost = best_child_cost;
+                                }
+                                if (min_child_cost.find(s) == min_child_cost.end()) {
+                                    min_child_cost.emplace(s, min_cost);
+                                } else {
+                                    double parent_min_cost = min_child_cost[s];
+                                    if (min_cost > parent_min_cost) {
+                                        min_cost = parent_min_cost;
+                                    }
+                                    min_child_cost[s] = min_cost;
+                                }
+                            }
                         }
                         if (pending.empty()) break;
+                        // pop new state 
                         state = pending.pop();
                         blessed++;
                     }

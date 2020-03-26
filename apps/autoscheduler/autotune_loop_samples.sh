@@ -98,10 +98,12 @@ make_featurization() {
         # Sample 0 in each batch is best effort beam search, with no randomness
         dropout=100
         beam=32
+        #weights="HL_WEIGHTS_DIR=${WEIGHTS}" # binary .dot
     else
         # The other samples are random probes biased by the cost model
         dropout=1  # 1% chance of operating entirely greedily
         beam=1
+        #weights="HL_RANDOMIZE_WEIGHTS=1"
     fi
     HL_SEED=${SEED} \
         HL_WEIGHTS_DIR=${WEIGHTS} \
