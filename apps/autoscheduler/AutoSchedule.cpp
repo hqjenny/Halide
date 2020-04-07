@@ -330,7 +330,6 @@ struct State {
                 for (size_t i = 0; i < num_pipeline_features; i++) {
                     buf[i + num_schedule_features] = s.features[i];
                 }
-
                 out.write((const char *)buf, sizeof(buf));
             }
         }
@@ -1074,7 +1073,9 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                                           int pass_idx,
                                           int num_passes,
                                           ProgressBar &tick,
-                                          std::unordered_set<uint64_t> &permitted_hashes) {
+                                          std::unordered_set<uint64_t> &permitted_hashes,
+                                          std::unordered_map<const State*, double>& min_child_cost 
+                                          ) {
 
     if (cost_model) {
         configure_pipeline_features(dag, params, cost_model);
@@ -1082,8 +1083,6 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
 
     StateQueue q, pending;
 
-    // JENNY construct map 
-    std::unordered_map<const State*, double> min_child_cost; 
 
     // The initial state, with no decisions made
     {
@@ -1117,6 +1116,8 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
     string cyos_str = get_env_variable("HL_CYOS");
 
     // This loop is beam search over the sequence of decisions to make.
+
+    std::cout << "start decision " << std::endl;
     for (int i = 0;; i++) {
         std::unordered_map<uint64_t, int> hashes;
         q.swap(pending); // queue into pending 
@@ -1136,7 +1137,8 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                                              pass_idx,
                                              num_passes,
                                              tick,
-                                             permitted_hashes);
+                                             permitted_hashes,
+                                             min_child_cost);
             } else {
                 internal_error << "Ran out of legal states with beam size " << beam_size << "\n";
             }
@@ -1147,7 +1149,15 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
         }
 
         expanded = 0;
+
+        string jenny_feature_file = get_env_variable("HL_JENNY_FEATURE_FILE");
+        //std::cout << "jenny_feature_file: " << jenny_feature_file << std::endl;
+        internal_assert(!jenny_feature_file.empty());
+        //std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::trunc | std::ios::app);
+        std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::ate | std::ios::app);
+
         // Beam search
+        std::cout << "start beam search " << i << std::endl;
         while (expanded < beam_size && !pending.empty()) {
 
             IntrusivePtr<State> state{pending.pop()};
@@ -1196,6 +1206,7 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
             }
 
             if (state->num_decisions_made == 2 * (int)dag.nodes.size()) {
+                std::cout << "JENNY finish beam search " << i << std::endl;
                 // We've reached the end of the pass. The first state
                 // must be the best, because we're pulling off a
                 // priority queue.
@@ -1206,12 +1217,15 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                 // reasonable as having a cost no more than 20% higher
                 // than the cost of the best thing. Only do this if
                 // there are more coarse-to-fine passes yet to come.
+                std::cout << "JENNY pass_idx: " << pass_idx << " num_passes:" << num_passes << std::endl;
+                std::cout << "JENNY pending size: " << pending.size()  << std::endl;
                 if (pass_idx + 1 < num_passes) {
                     int blessed = 0;
                     while (state->cost <= 1.2 * best->cost && blessed < beam_size) {
                         const State *s = state.get();
                         double best_child_cost = s->cost;
                         while (s) {
+                            std::cout << "JENNY blessed state parent" << i << std::endl;
                             uint64_t h1 = s->structural_hash(pass_idx);
                             permitted_hashes.insert(h1);
                             s = s->parent.get();
@@ -1223,12 +1237,17 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                                 }
                                 if (min_child_cost.find(s) == min_child_cost.end()) {
                                     min_child_cost.emplace(s, min_cost);
+                                    State* s_ptr = const_cast<State *>(s);
+                                    s_ptr->save_featurization(dag, params, binfile);
+                                        
                                 } else {
                                     double parent_min_cost = min_child_cost[s];
                                     if (min_cost > parent_min_cost) {
                                         min_cost = parent_min_cost;
                                     }
                                     min_child_cost[s] = min_cost;
+                                    State* s_ptr = const_cast<State *>(s);
+                                    s_ptr->save_featurization(dag, params, binfile);
                                 }
                             }
                         }
@@ -1245,7 +1264,7 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
             state->generate_children(dag, params, cost_model, enqueue_new_children);
             expanded++;
         }
-
+        binfile.close();
         // Drop the other states unconsidered.
         pending.clear();
 
@@ -1292,7 +1311,9 @@ IntrusivePtr<State> optimal_schedule(FunctionDAG &dag,
                                      const MachineParams &params,
                                      CostModel *cost_model,
                                      std::mt19937 &rng,
-                                     int beam_size) {
+                                     int beam_size,
+                                     std::unordered_map<const State*, double>& min_child_cost 
+                                     ) {
 
     IntrusivePtr<State> best;
 
@@ -1317,8 +1338,9 @@ IntrusivePtr<State> optimal_schedule(FunctionDAG &dag,
     for (int i = 0; i < num_passes; i++) {
         ProgressBar tick;
 
+        // pass is a State *
         auto pass = optimal_schedule_pass(dag, outputs, params, cost_model,
-                                          rng, beam_size, i, num_passes, tick, permitted_hashes);
+                                          rng, beam_size, i, num_passes, tick, permitted_hashes, min_child_cost);
 
         tick.clear();
 
@@ -1347,6 +1369,13 @@ void generate_schedule(const std::vector<Function> &outputs,
                        const MachineParams &params,
                        AutoSchedulerResults *auto_scheduler_results) {
     aslog(0) << "generate_schedule for target=" << target.to_string() << "\n";
+    string jenny_feature_file = get_env_variable("HL_JENNY_FEATURE_FILE");
+    std::cout << "jenny_feature_file: " << jenny_feature_file << std::endl;
+    if (!jenny_feature_file.empty()) {
+        std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::trunc);
+        binfile.close();
+    }
+
 
     // Start a timer
     HALIDE_TIC;
@@ -1372,6 +1401,7 @@ void generate_schedule(const std::vector<Function> &outputs,
     }
 
     string weights_in_path = get_env_variable("HL_WEIGHTS_DIR");
+    std::cout << "weights_in_path: " << weights_in_path << std::endl;
     string weights_out_path;  // deliberately empty
 
     string randomize_weights_str = get_env_variable("HL_RANDOMIZE_WEIGHTS");
@@ -1391,8 +1421,11 @@ void generate_schedule(const std::vector<Function> &outputs,
 
     IntrusivePtr<State> optimal;
 
+    std::cout << "generate_schedule" << std::endl;
+    // JENNY add min_child_cost dict 
+    std::unordered_map<const State*, double> min_child_cost; 
     // Run beam search
-    optimal = optimal_schedule(dag, outputs, params, cost_model.get(), rng, beam_size);
+    optimal = optimal_schedule(dag, outputs, params, cost_model.get(), rng, beam_size, min_child_cost);
 
     HALIDE_TOC;
 
@@ -1424,6 +1457,39 @@ void generate_schedule(const std::vector<Function> &outputs,
         f.close();
         internal_assert(!f.fail()) << "Failed to write " << schedule_file;
     }
+
+    //Save the features for min_cost 
+    string jenny_mincost_file = get_env_variable("HL_JENNY_MINCOST_FILE");
+    std::cout << "jenny_mincost_file: " << jenny_mincost_file << std::endl;
+
+    if (!jenny_mincost_file.empty()) {
+        //std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::trunc | std::ios::app);
+        std::ofstream mincostfile(jenny_mincost_file, std::ios_base::out | std::ios_base::trunc);
+        //mincostfile.open(jenny_mincost_file);
+        std::cout << "min_child_cost.size: " << min_child_cost.size() << std::endl;
+        std::cout <<  "item.second min cost: " << std::endl; 
+        int idx = 0;
+        //for (auto &item: min_child_cost) {
+        //    State* s_ptr = const_cast<State *>(item.first);
+        //    s_ptr->save_featurization(dag, params, binfile);
+        //    std::cout << "sample " << i++ << " , cost: " << item.second << std::endl;
+        //    mincostfile << item.second << std::endl;
+        //}
+        auto it = min_child_cost.begin();
+        while(it != min_child_cost.end()) {
+            //State* s_ptr = const_cast<State *>(it->first);
+            //s_ptr->save_featurization(dag, params, binfile);
+            std::cout << "sample " << idx << " , cost: " << it->second << std::endl;
+            mincostfile << it->second << std::endl;
+            idx ++;
+            it ++;
+        }
+        //binfile.close();
+        mincostfile.close();
+        //internal_assert(!binfile.fail()) << "Failed to write " << jenny_feature_file;
+    }
+
+
 
     // Save the featurization, so that we can use this schedule as
     // training data (once we've benchmarked it).
@@ -1475,7 +1541,11 @@ void find_and_apply_schedule(FunctionDAG &dag,
                              StageMap<ScheduleFeatures> *schedule_features) {
 
     std::mt19937 rng(12345);
-    IntrusivePtr<State> optimal = optimal_schedule(dag, outputs, params, cost_model, rng, beam_size);
+    // JENNY add min_child_cost dict 
+    std::unordered_map<const State*, double> min_child_cost; 
+
+    std::cout << "find_and_apply_schedule" << std::endl;
+    IntrusivePtr<State> optimal = optimal_schedule(dag, outputs, params, cost_model, rng, beam_size, min_child_cost);
 
     // Apply the schedules
     optimal->apply_schedule(dag, params);
