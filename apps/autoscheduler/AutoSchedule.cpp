@@ -84,6 +84,8 @@
 #include "NetworkSize.h"
 #include "PerfectHashMap.h"
 
+#include <sys/types.h>
+#include <sys/stat.h>
 #ifdef _WIN32
 #include <io.h>
 #define _isatty isatty;
@@ -98,6 +100,24 @@ using std::pair;
 using std::set;
 using std::string;
 using std::vector;
+
+static void _mkdir(const char *dir) {
+        char tmp[256];
+        char *p = NULL;
+        size_t len;
+
+        snprintf(tmp, sizeof(tmp),"%s",dir);
+        len = strlen(tmp);
+        if(tmp[len - 1] == '/')
+                tmp[len - 1] = 0;
+        for(p = tmp + 1; *p; p++)
+                if(*p == '/') {
+                        *p = 0;
+                        mkdir(tmp, S_IRWXU);
+                        *p = '/';
+                }
+        mkdir(tmp, S_IRWXU);
+}
 
 struct ProgressBar {
     void set(double progress) {
@@ -1074,7 +1094,7 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                                           int num_passes,
                                           ProgressBar &tick,
                                           std::unordered_set<uint64_t> &permitted_hashes,
-                                          std::unordered_map<const State*, double>& min_child_cost 
+                                          std::map<const State*, double>& min_child_cost 
                                           ) {
 
     if (cost_model) {
@@ -1150,12 +1170,13 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
 
         expanded = 0;
 
-        string jenny_feature_file = get_env_variable("HL_JENNY_FEATURE_FILE");
+        //string jenny_feature_file = get_env_variable("HL_JENNY_FEATURE_FILE");
         //std::cout << "jenny_feature_file: " << jenny_feature_file << std::endl;
-        internal_assert(!jenny_feature_file.empty());
+        //internal_assert(!jenny_feature_file.empty());
         //std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::trunc | std::ios::app);
-        std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::ate | std::ios::app);
+        //std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::ate | std::ios::app);
 
+        //size_t unique_id = 0;
         // Beam search
         std::cout << "start beam search " << i << std::endl;
         while (expanded < beam_size && !pending.empty()) {
@@ -1236,9 +1257,18 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                                     min_cost = best_child_cost;
                                 }
                                 if (min_child_cost.find(s) == min_child_cost.end()) {
+                                    size_t unique_id = min_child_cost.size();
+                                    string jenny_feature_file = get_env_variable("HL_JENNY_DIR") + "/"+ std::to_string(unique_id) + ".featurization";
+                                    std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::trunc);
+                                    //std::cout << "min_child_cost: " << min_child_cost.size() << ", unique_id: " << unique_id << std::endl;
+
+                                    //internal_assert(min_child_cost.size() == unique_id);
                                     min_child_cost.emplace(s, min_cost);
                                     State* s_ptr = const_cast<State *>(s);
                                     s_ptr->save_featurization(dag, params, binfile);
+
+                                    internal_assert(!binfile.fail()) << "Failed to write " << jenny_feature_file;
+                                    binfile.close();
                                         
                                 } else {
                                     double parent_min_cost = min_child_cost[s];
@@ -1246,8 +1276,8 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                                         min_cost = parent_min_cost;
                                     }
                                     min_child_cost[s] = min_cost;
-                                    State* s_ptr = const_cast<State *>(s);
-                                    s_ptr->save_featurization(dag, params, binfile);
+                                    //State* s_ptr = const_cast<State *>(s);
+                                    //s_ptr->save_featurization(dag, params, binfile);
                                 }
                             }
                         }
@@ -1264,7 +1294,7 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
             state->generate_children(dag, params, cost_model, enqueue_new_children);
             expanded++;
         }
-        binfile.close();
+        //binfile.close();
         // Drop the other states unconsidered.
         pending.clear();
 
@@ -1312,7 +1342,7 @@ IntrusivePtr<State> optimal_schedule(FunctionDAG &dag,
                                      CostModel *cost_model,
                                      std::mt19937 &rng,
                                      int beam_size,
-                                     std::unordered_map<const State*, double>& min_child_cost 
+                                     std::map<const State*, double>& min_child_cost 
                                      ) {
 
     IntrusivePtr<State> best;
@@ -1369,13 +1399,17 @@ void generate_schedule(const std::vector<Function> &outputs,
                        const MachineParams &params,
                        AutoSchedulerResults *auto_scheduler_results) {
     aslog(0) << "generate_schedule for target=" << target.to_string() << "\n";
-    string jenny_feature_file = get_env_variable("HL_JENNY_FEATURE_FILE");
-    std::cout << "jenny_feature_file: " << jenny_feature_file << std::endl;
-    if (!jenny_feature_file.empty()) {
-        std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::trunc);
-        binfile.close();
-    }
+    //std::cout << "jenny_feature_file: " << jenny_feature_file << std::endl;
+    //if (!jenny_feature_file.empty()) {
+    //    std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::trunc);
+    //    binfile.close();
+    //}
 
+    string jenny_dir = get_env_variable("HL_JENNY_DIR");
+    internal_assert(!jenny_dir.empty());
+        
+    rmdir(jenny_dir.c_str());
+    _mkdir(jenny_dir.c_str());
 
     // Start a timer
     HALIDE_TIC;
@@ -1423,7 +1457,7 @@ void generate_schedule(const std::vector<Function> &outputs,
 
     std::cout << "generate_schedule" << std::endl;
     // JENNY add min_child_cost dict 
-    std::unordered_map<const State*, double> min_child_cost; 
+    std::map<const State*, double> min_child_cost; 
     // Run beam search
     optimal = optimal_schedule(dag, outputs, params, cost_model.get(), rng, beam_size, min_child_cost);
 
@@ -1459,12 +1493,11 @@ void generate_schedule(const std::vector<Function> &outputs,
     }
 
     //Save the features for min_cost 
-    string jenny_mincost_file = get_env_variable("HL_JENNY_MINCOST_FILE");
-    std::cout << "jenny_mincost_file: " << jenny_mincost_file << std::endl;
+    //std::cout << "jenny_mincost_file: " << jenny_mincost_file << std::endl;
 
-    if (!jenny_mincost_file.empty()) {
+    //if (!jenny_mincost_file.empty()) {
         //std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::trunc | std::ios::app);
-        std::ofstream mincostfile(jenny_mincost_file, std::ios_base::out | std::ios_base::trunc);
+        //std::ofstream mincostfile(jenny_mincost_file, std::ios_base::out | std::ios_base::trunc);
         //mincostfile.open(jenny_mincost_file);
         std::cout << "min_child_cost.size: " << min_child_cost.size() << std::endl;
         std::cout <<  "item.second min cost: " << std::endl; 
@@ -1479,15 +1512,20 @@ void generate_schedule(const std::vector<Function> &outputs,
         while(it != min_child_cost.end()) {
             //State* s_ptr = const_cast<State *>(it->first);
             //s_ptr->save_featurization(dag, params, binfile);
+            string jenny_mincost_file = get_env_variable("HL_JENNY_DIR") + "/" + std::to_string(idx) + ".txt";
+            std::ofstream mincostfile(jenny_mincost_file, std::ios::binary | std::ios_base::trunc);
+
             std::cout << "sample " << idx << " , cost: " << it->second << std::endl;
             mincostfile << it->second << std::endl;
+            mincostfile.close();
             idx ++;
             it ++;
+
         }
         //binfile.close();
-        mincostfile.close();
+        //mincostfile.close();
         //internal_assert(!binfile.fail()) << "Failed to write " << jenny_feature_file;
-    }
+    //}
 
 
 
@@ -1542,7 +1580,7 @@ void find_and_apply_schedule(FunctionDAG &dag,
 
     std::mt19937 rng(12345);
     // JENNY add min_child_cost dict 
-    std::unordered_map<const State*, double> min_child_cost; 
+    std::map<const State*, double> min_child_cost; 
 
     std::cout << "find_and_apply_schedule" << std::endl;
     IntrusivePtr<State> optimal = optimal_schedule(dag, outputs, params, cost_model, rng, beam_size, min_child_cost);

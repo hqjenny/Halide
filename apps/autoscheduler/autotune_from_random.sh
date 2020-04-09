@@ -1,6 +1,6 @@
 echo > samples.all.txt
 
-bash /scratch/qijing.huang/Halide/apps/autoscheduler/autotune_loop_samples.sh \
+bash /scratch/qijing.huang/Halide/apps/autoscheduler/autotune_loop_samples_jenny.sh \
         bin/host/demo.generator \
         random_pipeline \
         "" \
@@ -12,7 +12,7 @@ bash /scratch/qijing.huang/Halide/apps/autoscheduler/autotune_loop_samples.sh \
         # ../random_pipeline/bin/random_pipeline.generator
         # random_pipeline
 
-bash /scratch/qijing.huang/Halide/apps/autoscheduler/autotune_loop_retrain.sh \
+bash /scratch/qijing.huang/Halide/apps/autoscheduler/autotune_loop_retrain_jenny.sh \
         bin/host/demo.generator \
         random_pipeline \
         "" \
