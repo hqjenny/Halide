@@ -357,10 +357,45 @@ map<int, PipelineSample> load_samples(const Flags &flags) {
     }
     if (!flags.best_schedule_path.empty()) {
         // best_path points to a .sample file; look for a .schedule.h file in the same dir
+        // does each dot h
         size_t dot = best_path.rfind('.');
+        std::cout << best_path << std::endl;
         assert(dot != string::npos && best_path.substr(dot) == ".sample");
-        string schedule_file = best_path.substr(0, dot) + ".schedule.h";
+        // does each has a schedule.h?
+        //string schedule_file = best_path.substr(0, dot) + ".schedule.h";
+        //size_t hl_jenny = best_path.rfind("/hl_jenny");
+        size_t hl_jenny = best_path.rfind("/hl_hqjenny");
+
+        string dir_path = best_path.substr(0, hl_jenny); 
+        
+        size_t slash = dir_path.rfind('/'); 
+        string sample_id = dir_path.substr(slash+1);
+        string parent_dir_path = dir_path.substr(0, slash); 
+
+        std::cout << "dir_path: "  << dir_path << std::endl;
+        std::cout << "parent_dir_path: "  << parent_dir_path << std::endl;
+        std::cout << "sample_id: "  << sample_id << std::endl;
+        
+        size_t parent_slash = parent_dir_path.rfind('/');
+        string parent_dir_name = parent_dir_path.substr(parent_slash);
+        std::cout << "parent_dir_name: "  << parent_dir_name << std::endl;
+        size_t batchid_zero = parent_dir_name.rfind("_0");
+        string batchid_base = parent_dir_name.substr(0, batchid_zero);
+        std::cout << "batchid_base: "  << batchid_base << std::endl;
+        //size_t batchid_str = batchid_base.rfind("/batch_");
+        string batch_id = batchid_base.substr(7);
+        std::cout << "batch_id: "  << batch_id << std::endl;
+
+        std::stringstream sample_id_ss; 
+        sample_id_ss << std::setw(4) << std::setfill('0') << sample_id; 
+        std::stringstream batch_id_ss; 
+        batch_id_ss << std::setw(4) << std::setfill('0') << batch_id; 
+
+        string schedule_file = dir_path + "/" + "random_pipeline_batch_" + batch_id_ss.str() + "_sample_" + sample_id_ss.str() + ".schedule.h";
+        std::cout << "schedule_file: "  << schedule_file << std::endl;
+            
         std::ifstream src(schedule_file);
+            
         std::ofstream dst(flags.best_schedule_path);
         dst << src.rdbuf();
         assert(!src.fail());
