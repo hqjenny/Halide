@@ -87,11 +87,13 @@ fi
 
 # Build a single featurization of the pipeline with a random schedule
 make_featurization() {
+    echo "make_featurization"
     D=${1}
     SEED=${2}
     FNAME=${3}
     EXTRA_GENERATOR_ARGS=${4}
     JENNY_DIR=${D}/hl_hqjenny
+    echo $JENNY_DIR 
     mkdir -p ${D}
     rm -f "${D}/${FNAME}.featurization"
     rm -f "${D}/${FNAME}.sample"
@@ -141,9 +143,11 @@ make_featurization() {
 
 # Benchmark one of the random samples
 benchmark_sample() {
+    echo "benchmark_sample"
     sleep 1 # Give CPU clocks a chance to spin back up if we're thermally throttling
     D=${1}
-    HL_JENNY_DIR=${D}/hl_jenny
+    HL_JENNY_DIR=${D}/hl_hqjenny
+    echo $HL_JENNY_DIR
 
     FILE_COUNT=$( shopt -s nullglob ; set -- ${HL_JENNY_DIR}/* ; echo $#)
     LOOP_BOUND=$((FILE_COUNT / 2))

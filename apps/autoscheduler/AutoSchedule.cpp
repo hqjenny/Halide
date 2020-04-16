@@ -1263,6 +1263,11 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                                     //std::cout << "min_child_cost: " << min_child_cost.size() << ", unique_id: " << unique_id << std::endl;
 
                                     //internal_assert(min_child_cost.size() == unique_id);
+                                    // if (min_cost <= 0) {
+                                    //     min_cost = 1;
+                                    // }
+
+                                    // assert(min_cost > 0);
                                     min_child_cost.emplace(s, min_cost);
                                     State* s_ptr = const_cast<State *>(s);
                                     s_ptr->save_featurization(dag, params, binfile);
@@ -1275,6 +1280,11 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                                     if (min_cost > parent_min_cost) {
                                         min_cost = parent_min_cost;
                                     }
+
+                                    //if (min_cost <= 0) {
+                                    //    min_cost = 1;
+                                    //}
+                                    //assert(min_cost > 0);
                                     min_child_cost[s] = min_cost;
                                     //State* s_ptr = const_cast<State *>(s);
                                     //s_ptr->save_featurization(dag, params, binfile);

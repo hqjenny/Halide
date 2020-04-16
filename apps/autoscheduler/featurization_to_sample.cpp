@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    dst << src.rdbuf();
+    //dst << src.rdbuf();
 
     // Input runtime value is presumed to be in seconds,
     // but sample file stores times in milliseconds.
@@ -31,10 +31,12 @@ int main(int argc, char **argv) {
     int32_t pid = atoi(argv[3]);
     int32_t sid = atoi(argv[4]);
 
-    dst.write((const char *)&r, 4);
-    dst.write((const char *)&pid, 4);
-    dst.write((const char *)&sid, 4);
-
+    if (r > 1) {
+        dst << src.rdbuf();
+        dst.write((const char *)&r, 4);
+        dst.write((const char *)&pid, 4);
+        dst.write((const char *)&sid, 4);
+    }
     src.close();
     dst.close();
 

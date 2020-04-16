@@ -142,7 +142,7 @@ benchmark_sample() {
     sleep 1 # Give CPU clocks a chance to spin back up if we're thermally throttling
     D=${1}
 
-    HL_JENNY_DIR=${D}/hl_jenny
+    HL_JENNY_DIR=${D}/hl_hqjenny
     FILE_COUNT=$( shopt -s nullglob ; set -- ${HL_JENNY_DIR}/* ; echo $#)
     LOOP_BOUND=$((FILE_COUNT / 2))
 
