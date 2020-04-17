@@ -1,5 +1,8 @@
 include ../support/Makefile.inc
 
+AUTOSCHED_SRC = $(realpath ../autoscheduler)
+AUTOSCHED_BIN = $(realpath ../autoscheduler/bin)
+
 .PHONY: build clean test
 
 build: $(BIN)/$(HL_TARGET)/filter

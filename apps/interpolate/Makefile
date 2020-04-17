@@ -1,5 +1,8 @@
 include ../support/Makefile.inc
 
+AUTOSCHED_SRC = $(realpath ../autoscheduler)
+AUTOSCHED_BIN = $(realpath ../autoscheduler/bin)
+
 .PHONY: build clean test
 
 build: $(BIN)/$(HL_TARGET)/filter
@@ -16,7 +19,7 @@ $(BIN)/%/interpolate.a: $(GENERATOR_BIN)/interpolate.generator
 
 $(BIN)/%/interpolate_auto_schedule.a: $(GENERATOR_BIN)/interpolate.generator
 	@mkdir -p $(@D)
-	$< -g interpolate -f interpolate_auto_schedule -o $(BIN)/$* target=$*-no_runtime auto_schedule=true
+	$< -g interpolate -f interpolate_auto_schedule -o $(BIN)/$* target=$*-no_runtime auto_schedule=true $(HL_CUSTOM_AUTOSCHEDULER)
 
 $(BIN)/%/runtime.a: $(GENERATOR_BIN)/interpolate.generator
 	@mkdir -p $(@D)

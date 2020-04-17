@@ -1,5 +1,8 @@
 include ../support/Makefile.inc
 
+AUTOSCHED_SRC = $(realpath ../autoscheduler)
+AUTOSCHED_BIN = $(realpath ../autoscheduler/bin)
+
 .PHONY: build clean test
 
 build: $(BIN)/$(HL_TARGET)/process
@@ -14,7 +17,7 @@ $(BIN)/%/stencil_chain.a: $(GENERATOR_BIN)/stencil_chain.generator
 
 $(BIN)/%/stencil_chain_auto_schedule.a: $(GENERATOR_BIN)/stencil_chain.generator
 	@mkdir -p $(@D)
-	$^ -g stencil_chain -e $(GENERATOR_OUTPUTS) -o $(@D) -f stencil_chain_auto_schedule target=$*-no_runtime auto_schedule=true
+	$^ -g stencil_chain -e $(GENERATOR_OUTPUTS) -o $(@D) -f stencil_chain_auto_schedule target=$*-no_runtime auto_schedule=true $(HL_CUSTOM_AUTOSCHEDULER)
 
 $(BIN)/%/process: process.cpp $(BIN)/%/stencil_chain.a $(BIN)/%/stencil_chain_auto_schedule.a
 	@mkdir -p $(@D)

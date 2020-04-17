@@ -1,5 +1,8 @@
 include ../support/Makefile.inc
 
+AUTOSCHED_SRC = $(realpath ../autoscheduler)
+AUTOSCHED_BIN = $(realpath ../autoscheduler/bin)
+
 .PHONY: build clean test
 
 build: $(BIN)/$(HL_TARGET)/filter
@@ -16,7 +19,7 @@ $(BIN)/%/bgu.a: $(GENERATOR_BIN)/bgu.generator
 
 $(BIN)/%/bgu_auto_schedule.a: $(GENERATOR_BIN)/bgu.generator
 	@mkdir -p $(@D)
-	$< -g bgu -f bgu_auto_schedule -o $(BIN)/$* target=$*-no_runtime auto_schedule=true
+	$< -g bgu -f bgu_auto_schedule -o $(BIN)/$* target=$*-no_runtime auto_schedule=true $(HL_CUSTOM_AUTOSCHEDULER)
 
 $(BIN)/%/runtime.a: $(GENERATOR_BIN)/bgu.generator
 	@mkdir -p $(@D)
