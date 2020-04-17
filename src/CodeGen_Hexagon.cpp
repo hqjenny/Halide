@@ -3,6 +3,7 @@
 #include <iostream>
 #include <mutex>
 #include <sstream>
+#include <utility>
 
 #include "AlignLoads.h"
 #include "CSE.h"
@@ -90,7 +91,7 @@ Stmt acquire_hvx_context(Stmt stmt, const Target &target) {
     stmt = Block::make(check_hvx_lock, stmt);
     return stmt;
 }
-bool is_dense_ramp(Expr x) {
+bool is_dense_ramp(const Expr &x) {
     const Ramp *r = x.as<Ramp>();
     if (!r) return false;
 
@@ -100,7 +101,7 @@ bool is_dense_ramp(Expr x) {
 // In Hexagon, we assume that we can read one vector past the end of
 // buffers. Using this assumption, this mutator replaces vector
 // predicated dense loads with scalar predicated dense loads.
-class SloppyUnpredicateLoads : public IRMutator {
+class SloppyUnpredicateLoadsAndStores : public IRMutator {
     Expr visit(const Load *op) override {
         // Don't handle loads with without predicates, scalar predicates, or
         // non-dense ramps.
@@ -127,8 +128,8 @@ class SloppyUnpredicateLoads : public IRMutator {
     using IRMutator::visit;
 };
 
-Stmt sloppy_unpredicate_loads(Stmt s) {
-    return SloppyUnpredicateLoads().mutate(s);
+Stmt sloppy_unpredicate_loads_and_stores(const Stmt &s) {
+    return SloppyUnpredicateLoadsAndStores().mutate(s);
 }
 
 class InjectHVXLocks : public IRMutator {
@@ -270,9 +271,11 @@ void CodeGen_Hexagon::compile_func(const LoweredFunc &f,
     Stmt body = f.body;
 
     debug(1) << "Unpredicating loads and stores...\n";
-    // Before running unpredicate_loads_stores, replace dense vector
-    // predicated loads with sloppy scalarized predicates.
-    body = sloppy_unpredicate_loads(body);
+    // Replace dense vector predicated loads and stores with
+    // scalarized versions. We can afford to be a little sloppy with
+    // the dense vector loads because on hexagon we can always read
+    // out of bounds by one vector.
+    body = sloppy_unpredicate_loads_and_stores(body);
     body = unpredicate_loads_stores(body);
     debug(2) << "Lowering after unpredicating loads/stores:\n"
              << body << "\n\n";
@@ -1107,7 +1110,7 @@ void CodeGen_Hexagon::init_module() {
             if (a.bits == 0) {
                 break;
             }
-            arg_types.push_back(fix_lanes(a));
+            arg_types.emplace_back(fix_lanes(a));
         }
         define_hvx_intrinsic(intrin, ret_type, i.name, arg_types, i.flags);
     }
@@ -1247,7 +1250,7 @@ Value *CodeGen_Hexagon::call_intrin_cast(llvm::Type *ret_ty, int id,
                                          vector<Value *> Ops) {
     llvm::Function *intrin =
         Intrinsic::getDeclaration(module.get(), (llvm::Intrinsic::ID)id);
-    return call_intrin_cast(ret_ty, intrin, Ops);
+    return call_intrin_cast(ret_ty, intrin, std::move(Ops));
 }
 
 Value *CodeGen_Hexagon::interleave_vectors(const vector<llvm::Value *> &v) {
@@ -1857,7 +1860,12 @@ Value *CodeGen_Hexagon::vdelta(Value *lut, const vector<int> &indices) {
 static Value *create_vector(llvm::Type *ty, int val) {
     llvm::Type *scalar_ty = ty->getScalarType();
     Constant *value = ConstantInt::get(scalar_ty, val);
-    return ConstantVector::getSplat(ty->getVectorNumElements(), value);
+#if LLVM_VERSION >= 110
+    const llvm::ElementCount elem_count(ty->getVectorNumElements(), /*scalable*/ false);
+#else
+    const int elem_count = ty->getVectorNumElements();
+#endif
+    return ConstantVector::getSplat(elem_count, value);
 }
 
 Value *CodeGen_Hexagon::vlut(Value *lut, Value *idx, int min_index, int max_index) {
@@ -1942,7 +1950,7 @@ Value *CodeGen_Hexagon::vlut(Value *lut, Value *idx, int min_index, int max_inde
         int range_extent_i = std::min(max_index - min_index_i, 255);
         Value *range_i = vlut256(slice_vector(lut, min_index_i, range_extent_i),
                                  indices, 0, range_extent_i);
-        ranges.push_back({range_i, use_index});
+        ranges.emplace_back(range_i, use_index);
     }
 
     // TODO: This could be reduced hierarchically instead of in
@@ -2013,11 +2021,11 @@ string type_suffix(Type type, bool signed_variants = true) {
     return "";
 }
 
-string type_suffix(Expr a, bool signed_variants = true) {
+string type_suffix(const Expr &a, bool signed_variants = true) {
     return type_suffix(a.type(), signed_variants);
 }
 
-string type_suffix(Expr a, Expr b, bool signed_variants = true) {
+string type_suffix(const Expr &a, const Expr &b, bool signed_variants = true) {
     return type_suffix(a, signed_variants) + type_suffix(b, signed_variants);
 }
 
@@ -2048,7 +2056,7 @@ Value *CodeGen_Hexagon::call_intrin(Type result_type, const string &name,
         }
     }
     return call_intrin(result_type, fn->getReturnType()->getVectorNumElements(),
-                       get_llvm_function_name(fn), args);
+                       get_llvm_function_name(fn), std::move(args));
 }
 
 Value *CodeGen_Hexagon::call_intrin(llvm::Type *result_type, const string &name,
@@ -2067,7 +2075,7 @@ Value *CodeGen_Hexagon::call_intrin(llvm::Type *result_type, const string &name,
         }
     }
     return call_intrin(result_type, fn->getReturnType()->getVectorNumElements(),
-                       get_llvm_function_name(fn), args);
+                       get_llvm_function_name(fn), std::move(args));
 }
 
 string CodeGen_Hexagon::mcpu() const {

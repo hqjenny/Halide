@@ -72,6 +72,9 @@
 #include <unordered_map>
 #include <unordered_set>
 
+//#include "mcts/IState.h"
+#include "mcts/ofxMSAmcts.h"
+
 #include "ASLog.h"
 #include "AutoSchedule.h"
 #include "CostModel.h"
@@ -84,8 +87,6 @@
 #include "NetworkSize.h"
 #include "PerfectHashMap.h"
 
-#include <sys/types.h>
-#include <sys/stat.h>
 #ifdef _WIN32
 #include <io.h>
 #define _isatty isatty;
@@ -101,24 +102,6 @@ using std::set;
 using std::string;
 using std::vector;
 
-static void _mkdir(const char *dir) {
-        char tmp[256];
-        char *p = NULL;
-        size_t len;
-
-        snprintf(tmp, sizeof(tmp),"%s",dir);
-        len = strlen(tmp);
-        if(tmp[len - 1] == '/')
-                tmp[len - 1] = 0;
-        for(p = tmp + 1; *p; p++)
-                if(*p == '/') {
-                        *p = 0;
-                        mkdir(tmp, S_IRWXU);
-                        *p = '/';
-                }
-        mkdir(tmp, S_IRWXU);
-}
-
 struct ProgressBar {
     void set(double progress) {
         if (!draw_progress_bar) return;
@@ -126,29 +109,29 @@ struct ProgressBar {
         const int bits = 11;
         if (counter & ((1 << bits) - 1)) return;
         const int pos = (int)(progress * 78);
-        aslog(0) << '[';
+        aslog(0) << "[";
         for (int j = 0; j < 78; j++) {
             if (j < pos) {
-                aslog(0) << '.';
+                aslog(0) << ".";
             } else if (j - 1 < pos) {
                 aslog(0) << "/-\\|"[(counter >> bits) % 4];
             } else {
-                aslog(0) << ' ';
+                aslog(0) << " ";
             }
         }
-        aslog(0) << ']';
+        aslog(0) << "]";
         for (int j = 0; j < 80; j++) {
-            aslog(0) << '\b';
+            aslog(0) << "\b";
         }
     }
 
     void clear() {
         if (counter) {
             for (int j = 0; j < 80; j++) {
-                aslog(0) << ' ';
+                aslog(0) << " ";
             }
             for (int j = 0; j < 80; j++) {
-                aslog(0) << '\b';
+                aslog(0) << "\b";
             }
         }
     }
@@ -203,7 +186,6 @@ struct State {
 
     static int cost_calculations;
 
-    // generate a hash for the current state
     uint64_t structural_hash(int depth) const {
         uint64_t h = num_decisions_made;
         internal_assert(root.defined());
@@ -254,16 +236,10 @@ struct State {
     }
 
     void compute_featurization(const FunctionDAG &dag, const MachineParams &params, StageMap<ScheduleFeatures> *features) {
-        
         StageMap<LoopNest::Sites> sites;
-        // init hash with max_id 
         sites.make_large(dag.nodes[0].stages[0].max_id);
         features->make_large(dag.nodes[0].stages[0].max_id);
-
-        // root is a LoopNest
         internal_assert(root.defined());
-
-        // Compute all the sites of interest for each pipeline stage
         root->get_sites(sites);
 
         // For the input nodes and unscheduled outputs, the compute
@@ -329,7 +305,6 @@ struct State {
     }
 
     void save_featurization(const FunctionDAG &dag, const MachineParams &params, std::ostream &out) {
-        // StageMap=PerfectHashMap<FunctionDAG::Node::Stage, T>;
         StageMap<ScheduleFeatures> features;
         compute_featurization(dag, params, &features);
 
@@ -350,56 +325,17 @@ struct State {
                 for (size_t i = 0; i < num_pipeline_features; i++) {
                     buf[i + num_schedule_features] = s.features[i];
                 }
+
                 out.write((const char *)buf, sizeof(buf));
             }
         }
     }
 
-    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params, CostModel *cost_model, bool verbose = false) {
+    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params, CostModel *cost_model, bool verbose = false, bool enq = false) {
         StageMap<ScheduleFeatures> features;
         compute_featurization(dag, params, &features);
 
         cost = 0;
-
-        // Hasan begin
-        if (verbose) {
-            for (const auto &n : dag.nodes) {
-                auto sched_feat = vector<ScheduleFeatures>();
-
-                for (const auto& f : features) {
-                    const auto& stage = *f.first;
-                    const auto& feat = f.second;
-                    if (stage.node == &n) {
-                        sched_feat.push_back(feat);
-                    }
-                }
-
-                if (sched_feat.size() < n.stages.size()) {
-                    // This Func hasn't been scheduled yet.
-                    break;
-                }
-
-                for (size_t stage_idx = n.stages.size(); stage_idx > 0; stage_idx--) {
-                    const auto &s = n.stages[stage_idx - 1];
-                    debug(0) << "YYY ";
-                    debug(0) << n.func.name() << ' ' << (stage_idx - 1) << ' ';
-                    const int64_t *sched_stats = (const int64_t *)(&sched_feat[stage_idx - 1]);
-                    for (size_t i = 0; i < sizeof(ScheduleFeatures) / sizeof(int64_t); i++) {
-                        // The schedule-based features are all
-                        // naturally multiplicative and have a very
-                        // large dynamic range, so we emit them
-                        // logged
-                        debug(0) << std::log(1 + sched_stats[i]) << ' ';
-                    }
-                    const int *stats = (const int *)(&s.features);
-                    for (size_t i = 0; i < sizeof(s.features) / sizeof(int); i++) {
-                        debug(0) << stats[i] << ' ';
-                    }
-                    debug(0) << '\n';
-                }
-            }
-        }
-        // Hasan end
 
         if (verbose) {
             for (auto it = features.begin(); it != features.end(); it++) {
@@ -433,8 +369,9 @@ struct State {
         // evaluate it until we call evaluate_costs (or if it runs out
         // of internal buffer space), so that the evaluations can be
         // batched.
-        cost_model->enqueue(dag, features, &cost);
-
+        if(enq) {
+            cost_model->enqueue(dag, features, &cost);
+        }
         cost_calculations++;
         return true;
     }
@@ -459,16 +396,13 @@ struct State {
                            std::function<void(IntrusivePtr<State> &&)> &accept_child) const {
         internal_assert(root.defined() && root->is_root());
 
-        // Terminating the run, if num_decisions_made is two times the DAG nodes size 
         if (num_decisions_made == 2 * (int)dag.nodes.size()) {
             return;
         }
 
-        // JENNY why next_node is /2? 
         int next_node = num_decisions_made / 2;
         int phase = num_decisions_made % 2;
 
-        // JENNY older search space may_subtile == False 
         if (!may_subtile()) {
             // When emulating the older search space, we do all
             // parallelizing last, so that it is independent of the
@@ -490,18 +424,12 @@ struct State {
             // and there are no other decisions to be made about them
             // at this time.
             // aslog(0) << "Skipping over scheduling input node: " << node->func.name() << "\n";
-            // JENNY init cost from parent state 
             auto child = make_child();
-            // child's num_decisions_made is parent's num_decisions_made + 1
             child->num_decisions_made++;
-            // accept_child is enqueue_new_children
-            // calles q.emplace(std::move(s));
             accept_child(std::move(child));
             return;
         }
 
-        // if there is outgoing_edges and 
-        // see if this loop nest access the given Func which is the node
         if (!node->outgoing_edges.empty() && !root->calls(node)) {
             aslog(0) << "In state:\n";
             dump();
@@ -513,7 +441,7 @@ struct State {
                     aslog(0) << "  " << e2->producer->func.name() << "\n";
                 }
             }
-            internal_error << "Pipeline so far doesn't use next Func: " << node->func.name() << '\n';
+            internal_error << "Pipeline so far doesn't use next Func: " << node->func.name() << "\n";
         }
 
         int num_children = 0;
@@ -529,7 +457,6 @@ struct State {
                     new_root->inline_func(node);
                     child->root = new_root;
                     child->num_decisions_made++;
-                    // if cost is too high, not fork the children
                     if (child->calculate_cost(dag, params, cost_model)) {
                         num_children++;
                         accept_child(std::move(child));
@@ -780,15 +707,458 @@ struct State {
             // children. Carry on.
         }
     }
+    enum class ActionEnum {
+        Inline,
+        Retile,
+        Option,
+        Input,
+        Parallelize
+    };
+    class Action {
+    public:
+        ActionEnum ae;
+        unsigned index;
+        unsigned option_var;
+        //AHA: If this constructor is called then there is a bug in the MCTS
+        //Action() { assert(0 && "illegal construction"); }
+        Action(std::nullptr_t) : ae(ActionEnum::Inline), index(0), option_var(0) {
+        }
+        Action(const Action& a):ae(a.ae), index(a.index), option_var(a.option_var) {}
+        Action(ActionEnum ae_, unsigned index_) : ae(ae_), index(index_), option_var(0) {}
+        Action(ActionEnum ae_, unsigned index_, unsigned option_var_) : ae(ae_), index(index_), option_var(option_var_) {}
+        bool operator==(const Action& a) const {
+            return ae == a.ae && index == a.index && option_var == a.option_var;
+        }
+        //AHA: this operator is to support comparison used in map.
+        bool operator<(const Action& a) const {
+            return index < a.index;
+        }
+    };
+
+    class WrapperState {
+    public:
+        IntrusivePtr<State> inner;
+        unsigned numleft;
+
+        const FunctionDAG &dag;
+        const MachineParams &params;
+       CostModel *cost_model;
+
+    WrapperState(IntrusivePtr<State> other_inner, unsigned numleft, const FunctionDAG &dag, const MachineParams &params, CostModel* cost_model) :  numleft(numleft), dag(dag), params(params),
+    cost_model(cost_model) {
+        inner = new State;
+        inner->parent = other_inner->parent;
+        inner->root = other_inner->root;
+        inner->cost = other_inner->cost;
+        inner->num_decisions_made = other_inner->num_decisions_made;
+        inner->cost_calculations = other_inner->cost_calculations;
+        //inner->ref_count = other.inner->ref_count;
+        inner->penalized = other_inner->penalized;
+
+    //std::cout << "WrapperState(1) cost: " <<inner->cost<< " num decisions made: "<<inner->num_decisions_made<<" cost calc: " <<inner->cost_calculations<< std::endl;
+    }
+    // copy and assignment operators should perform a DEEP clone of the given state
+    WrapperState(const WrapperState& other) :
+        WrapperState(other.inner, other.numleft, other.dag, other.params, other.cost_model) {}
+    
+    WrapperState& operator = (const WrapperState& other) = delete;
+
+    // whether or not this state is terminal (reached end)
+    // AHA: can be ignored as we limit the horizon to num_passes
+    bool is_terminal() const {
+        //std::cout << "is_terminal()" << std::endl;
+        std::vector<Action> actions;
+        get_actions(actions);
+      //  std::cout << "action size in is terminal " <<actions.size() << std::endl;
+        if (actions.size() ==0) return true;
+        return false;
+    }
+
+    //  agent id (zero-based) for agent who is about to make a decision
+    int agent_id() const {
+        //std::cout << "agent_id()" << std::endl;
+        return 0;
+    }
+
+    // apply action to state
+    void apply_action(const Action& action) {
+        //std::cout << "apply_action()" << std::endl;
+        std::map<Action, IntrusivePtr<State>> actions;
+        inner->generate_actions(dag, params, cost_model, actions);
+        //std::cout << "action size in apply action " <<actions.size() << std::endl;
+        for(auto &pair : actions) {
+            if (pair.first == action) {
+                inner = pair.second;
+            }
+        }
+        //internal_assert(0);
+    }
+
+    // return possible actions from this state
+    void get_actions(std::vector<Action>& vactions) const {
+        //std::cout << "get_actions()" << std::endl;
+        std::map<Action, IntrusivePtr<State>> actions;
+        inner->generate_actions(dag, params, cost_model, actions);
+        //std::cout << "action size in get actions " <<actions.size() << std::endl;
+        for(auto &pair : actions) {
+            vactions.push_back(pair.first);
+        }
+    }
+
+    // get a random action, return false if no actions found
+    bool get_random_action(Action& action) const {
+        //std::cout << "get_random_action()" << std::endl;
+        std::vector<Action> actions;
+        get_actions(actions);
+        //std::cout << "action size in get random actions " <<actions.size() << std::endl;
+        if (actions.size() == 0) return false;
+        //note rand isn't truly uniform random so should fix
+        action = actions[rand() % actions.size()];
+        return true;
+    }
+
+    // evaluate this state and return a vector of rewards (for each agent)
+    const std::vector<float> evaluate() const {
+        //std::cout << "evaluate()" << std::endl;
+        inner->calculate_cost(dag, params, cost_model, false, true);
+        //std::cout << "calculate_cost()" << std::endl;
+        internal_assert(cost_model && "bug, cost model not defined");
+        cost_model->evaluate_costs();
+        //std::cout << "evaluate_costs()" << std::endl;
+        //std::cout << "inner cost "<<inner->cost << std::endl;
+        return { (float)(inner->cost)}; 
+    }
+
+    // return state as string (for debug purposes)
+    std::string to_string() const {
+        //std::cout << "to_string()" << std::endl;
+        return "";
+    }
+    };
+
+    void generate_actions(const FunctionDAG &dag,
+                           const MachineParams &params,
+                           CostModel *cost_model,
+                           std::map<Action, IntrusivePtr<State>> &actions) const {
+        internal_assert(root.defined() && root->is_root());
+        /*std::cout << "in_generate_actions" << std::endl;
+        std::cout << num_decisions_made << std::endl;
+        std::cout << "-------------------" << std::endl;
+        std::cout << dag.nodes.size() << std::endl;
+        std::cout << "-------------------" << std::endl;*/
+        if (num_decisions_made == 2*(int)dag.nodes.size()) {
+            return;
+        }
+
+        int next_node = num_decisions_made / 2;
+        int phase = num_decisions_made % 2;
+        /*    
+        std::cout << may_subtile() << std::endl;
+        std::cout << "-------------------" << std::endl;
+        std::cout << next_node << std::endl;
+        std::cout << "-------------------" << std::endl;
+        std::cout << phase << std::endl;
+        std::cout << "-------------------" << std::endl;
+        */
+        if (!may_subtile()) {
+            // When emulating the older search space, we do all
+            // parallelizing last, so that it is independent of the
+            // tiling decisions.
+            next_node = num_decisions_made % dag.nodes.size();
+            phase = num_decisions_made / dag.nodes.size();
+        }
+
+        // Enumerate all legal ways to schedule the next Func
+        const FunctionDAG::Node *node = &dag.nodes[next_node];
+        //std::cout << "is input? " << node->is_input << std::endl;
+        for (const auto *e : node->outgoing_edges) {
+            internal_assert(root->computes(e->consumer->node))
+                << "Partially scheduled code doesn't compute " << e->consumer->name
+                << ", which is one of the consumers of " << node->func.name();
+        }
+
+        if (node->is_input) {
+            // We don't need to schedule nodes that represent inputs,
+            // and there are no other decisions to be made about them
+            // at this time.
+            debug(0) << "Skipping over scheduling input node: " << node->func.name() << "\n";
+            auto child = make_child();
+            child->num_decisions_made++;
+            actions.emplace(Action(ActionEnum::Input,0), std::move(child));
+            return;
+        }
+
+        if (!node->outgoing_edges.empty() && !root->calls(node)) {
+            debug(0) << "In state:\n";
+            dump();
+            debug(0) << node->func.name() << " is consumed by:\n";
+            for (const auto *e : node->outgoing_edges) {
+                debug(0) << e->consumer->name << "\n";
+                debug(0) << "Which in turn consumes:\n";
+                for (const auto *e2 : e->consumer->incoming_edges) {
+                    debug(0) << "  " << e2->producer->func.name() << "\n";
+                }
+            }
+            internal_error << "Pipeline so far doesn't use next Func: " << node->func.name() << '\n';
+        }
+
+        int num_children = 0;
+
+        if (phase == 0) {
+            // Injecting realizations
+            {
+                // 1) Inline it
+                if (node->stages.size() == 1 && !node->is_output) {
+                    auto child = make_child();
+                    LoopNest *new_root = new LoopNest;
+                    new_root->copy_from(*root);
+                    new_root->inline_func(node);
+                    child->root = new_root;
+                    child->num_decisions_made++;
+                    if (child->calculate_cost(dag, params, cost_model)) {
+                        num_children++;
+                        actions.emplace(Action(ActionEnum::Inline,num_children-1), std::move(child));
+                    }
+                }
+            }
+
+            // Some search-space pruning. If a node is pointwise, and
+            // so are all its inputs and so is its sole output, and
+            // inlining it is legal, just inline it. This saves time
+            // on long chains of pointwise things.
+            bool must_inline = (node->is_pointwise &&
+                                (num_children > 0) &&
+                                (node->outgoing_edges.size() == 1));
+            if (must_inline) {
+                for (const auto *e : node->stages[0].incoming_edges) {
+                    must_inline &= e->producer->is_pointwise;
+                }
+                for (const auto *e : node->outgoing_edges) {
+                    must_inline &= (e->consumer->node->is_pointwise ||
+                                    e->consumer->node->is_boundary_condition);
+                }
+                if (must_inline) {
+                    return;
+                }
+            }
+        //std::cout << must_inline << std::endl;
+        //std::cout << "------up is must inline-------------" << std::endl;
+
+            // Construct a list of plausible dimensions to vectorize
+            // over. Currently all of them. TODO: Pre-prune the list
+            // of sane dimensions to vectorize a Func over to reduce
+            // branching factor.
+            vector<int> vector_dims;
+            if (!node->is_input && !node->is_output) {
+                for (int v = 0; v < node->dimensions; v++) {
+                    const auto &p = root->get_bounds(node)->region_computed(v);
+                    if (p.extent() >= node->vector_size) {
+                        vector_dims.push_back(v);
+                    }
+                }
+            }
+            // Outputs must be vectorized over their innermost
+            // dimension, because we don't have control of the
+            // storage. TODO: Go inspect to see which dimension has a
+            // stride==1 constraint instead of assuming 0.
+            if (vector_dims.empty()) {
+                vector_dims.push_back(0);
+            }
+        //std::cout << "------herere-------------" << std::endl;
+        //std::cout << num_children << std::endl;
+
+            // 2) Realize it somewhere
+            for (int vector_dim : vector_dims) {
+                auto tile_options = root->compute_in_tiles(node, nullptr, params, vector_dim, false);
+                for (IntrusivePtr<const LoopNest> &n : tile_options) {
+                    auto child = make_child();
+                    child->root = std::move(n);
+                    child->num_decisions_made++;
+                    if (child->calculate_cost(dag, params, cost_model)) {
+                        num_children++;
+                        // AHA: shouldn't the index (num_children-1) fix the hash issue?
+                        unsigned hash = vector_dim;
+                        //child->structural_hash(hash, /*depth*/10);
+                        child->structural_hash(/*depth*/hash); // AHA:hash being depth seems ambiguous
+                        actions.emplace(Action(ActionEnum::Retile,num_children-1, hash), std::move(child));
+                    }
+                }
+            }
+        } else {
+            // We are parallelizing the loops of the func we just injected a realization for.
+
+            bool should_parallelize = false;
+            const vector<int64_t> *pure_size = nullptr;
+            if (params.parallelism > 1) {
+                for (auto &c : root->children) {
+                    if (c->node == node && node->dimensions > 0) {
+                        if (c->stage->index == 0) {
+                            pure_size = &(c->size);
+                        }
+                        should_parallelize = true;
+                    }
+                }
+            }
+
+            if (!should_parallelize) {
+                // The Func must be scalar, or not compute_root, or
+                // we're not asking to use multiple cores.  Just
+                // return a copy of the parent state
+                num_children++;
+                auto child = make_child();
+                child->num_decisions_made++;
+                actions.emplace(Action(ActionEnum::Parallelize,num_children-1), std::move(child));
+            } else {
+                internal_assert(pure_size);
+
+                // Generate some candidate parallel task shapes.
+                auto tilings = generate_tilings(*pure_size, node->dimensions - 1, 2, true);
+
+                // We could also just parallelize the outer loop entirely
+                std::vector<int64_t> ones;
+                ones.resize(pure_size->size(), 1);
+                tilings.emplace_back(std::move(ones));
+
+                // Sort / filter the options
+                struct Option {
+                    vector<int64_t> tiling;
+                    double idle_core_wastage;
+                    bool entire;
+                    bool operator<(const Option &other) const {
+                        return idle_core_wastage < other.idle_core_wastage;
+                    }
+                    //WM: note that instead of hashing the overal set of options we shall move to simply using
+                    //  the defined actions that create the tiling. However, until the point that the action space
+                    //  is set, this should be fine for an initial integration test
+                    unsigned hash () const {
+                        unsigned h = 0;
+                        for(auto t : tiling) h ^= (t + 0x9e3779b9 + (h << 6) + (h >> 2));
+                        h ^= (entire + 0x9e3779b9 + (h << 6) + (h >> 2));
+                        //choosing to ignore idel_core_wastage h ^= (t + 0x9e3779b9 + (h << 6) + (h >> 2));
+                        return h;
+                    }
+                };
+                vector<Option> options;
+                for (size_t i = 0; i < tilings.size(); i++) {
+                    auto &t = tilings[i];
+                    Option o;
+                    o.entire = (i == tilings.size() - 1);
+
+                    for (size_t j = 0; j < pure_size->size(); j++) {
+                        t[j] = ((*pure_size)[j] + t[j] - 1) / t[j];
+                    }
+                    t.swap(o.tiling);
+
+                    // Compute max idle cores across the other stages of the Func
+                    int64_t min_total = 0, max_total = 0;
+                    o.idle_core_wastage = 1;
+                    for (const auto &c : root->children) {
+                        if (c->node == node) {
+                            int64_t total = 1;
+                            for (auto &l : c->stage->loop) {
+                                if (!l.rvar) {
+                                    total *= o.tiling[l.pure_dim];
+                                }
+                            }
+                            if (min_total != 0) {
+                                min_total = std::min(min_total, total);
+                            } else {
+                                min_total = total;
+                            }
+                            max_total = std::max(max_total, total);
+                            const double tasks_per_core = ((double)total) / params.parallelism;
+                            o.idle_core_wastage = std::max(o.idle_core_wastage,
+                                                           std::ceil(tasks_per_core) /
+                                                           tasks_per_core);
+                        }
+                    }
+
+                    // Filter out the less useful options
+                    bool ok =
+                        ((o.entire || min_total >= params.parallelism) &&
+                         (max_total <= params.parallelism * 16));
+
+                    if (!ok) continue;
+
+                    options.emplace_back(std::move(o));
+                }
+                std::sort(options.begin(), options.end());
+
+                // If none of the options were acceptable, don't
+                // parallelize. This tends to happen for things like
+                // compute_root color matrices.
+                if (options.empty()) {
+                    num_children++;
+                    auto child = make_child();
+                    child->num_decisions_made++;
+                    //AHA: adding again maybe for sig fault?
+                    actions.emplace(Action(ActionEnum::Option,num_children-1), std::move(child));
+                    //WM: didn't create a new child here as didn't appear to be different from parent [thus consider illegal action, or could simply use identity action]
+                    //accept_child(std::move(child));
+                    return;
+                }
+
+                for (const auto &o : options) {
+                    if (num_children >= 1 && (o.idle_core_wastage > 1.2 || !may_subtile())) {
+                        // We have considered several options, and the
+                        // remaining ones leave lots of cores idle.
+                        break;
+                    }
+
+                    auto child = make_child();
+                    LoopNest *new_root = new LoopNest;
+                    new_root->copy_from(*root);
+                    for (auto &c : new_root->children) {
+                        if (c->node == node) {
+                            if (may_subtile()) {
+                                c = c->parallelize_in_tiles(params, o.tiling, new_root);
+                            } else {
+                                // We're emulating the old
+                                // autoscheduler for an ablation, so
+                                // emulate its parallelism strategy:
+                                // just keep parallelizing outer loops
+                                // until enough are parallel.
+                                vector<int64_t> tiling = c->size;
+                                int64_t total = 1;
+                                for (size_t i = c->size.size(); i > 0; i--) {
+                                    if (!c->stage->loop[i-1].pure || total >= params.parallelism) {
+                                        tiling[i-1] = 1;
+                                    }
+                                    while (tiling[i-1] > 1 &&
+                                           total * tiling[i-1] > params.parallelism * 8) {
+                                        tiling[i-1] /= 2;
+                                    }
+                                    total *= tiling[i-1];
+                                }
+                                c = c->parallelize_in_tiles(params, tiling, new_root);
+                            }
+                        }
+                    }
+                    child->root = new_root;
+                    child->num_decisions_made++;
+                    if (child->calculate_cost(dag, params, cost_model)) {
+                        num_children++;
+                        actions.emplace(Action(ActionEnum::Option,num_children-1, o.hash()), std::move(child));
+                    }
+                }
+            }
+        }
+
+        //std::cout << "-------------------ac size" <<actions.size()<< std::endl;
+        
+        if (num_children == 0 || actions.size()==0) {
+            debug(0) << "Warning: Found no legal way to schedule "
+                     << node->func.name() << " in the following State:\n";
+            dump();
+            // All our children died. Maybe other states have had
+            // children. Carry on.
+        }
+
+    }
+
 
     void dump() const {
         aslog(0) << "State with cost " << cost << ":\n";
-        root->dump("", nullptr);
-        aslog(0) << schedule_source;
-    }
-
-    void debug_dump() const {
-        aslog(0) << "Optimal state with cost " << cost << ":\n";
         root->dump("", nullptr);
         aslog(0) << schedule_source;
     }
@@ -953,12 +1323,6 @@ private:
         }
     };
 
-    struct CompareIdx {
-        bool operator()(const int &a, const int &b) const {
-            return a > b;
-        }
-    };
-
     std::vector<IntrusivePtr<State>> storage;
     size_t sz = 0;
 
@@ -1005,68 +1369,6 @@ public:
         std::make_heap(storage.begin(), storage.begin() + sz, CompareStates{});
     }
 
-    // Resort the queue based on a probabilistic model
-    void prob_resort() {
-        // get prob of each     
-        // instead of using current cost model, we should use Q(s,a) model or V(s) model
-        // store the cost model somewhere else
-        vector<double> inv_cost_vec;
-        vector<int> idx;
-        //std::cout << "cost/inv_cost: ";
-        for (size_t i = 0; i < sz; i++) {
-            IntrusivePtr<State> s_ptr = storage[i];
-            //std::cout << s_ptr->cost;
-            internal_assert(s_ptr->cost > 0);
-            double inv_cost = 1 / s_ptr-> cost;
-            inv_cost_vec.push_back(inv_cost);
-            //std::cout << "/" << inv_cost
-            //     << ", ";
-            idx.push_back(i);
-        }
-        //std::cout << std::endl;
-
-        // draw without resample from the state 
-        std::random_device rd;
-        std::mt19937 g(rd());
-        //std::shuffle(storage.begin(), storage.end(), g);
-        
-        vector<int> sort_idx;
-        while(!idx.empty()) {
-
-            double total_inv_cost = accumulate(inv_cost_vec.begin(), inv_cost_vec.end(), 0);  
-
-            // construct prob vec based on the inverse cost model
-            vector<double> prob_vec;
-            for (auto it= inv_cost_vec.begin(); it != inv_cost_vec.end(); ++it){
-                prob_vec.push_back((*it / total_inv_cost) * 100);
-            }
-
-            // construct discrete_distribution
-            std::discrete_distribution<int> dist(prob_vec.begin(), prob_vec.end());
-            int drawn_idx = dist(g);
-            
-
-            // add drawn idx to sort_idx 
-            int idx_val = idx[drawn_idx];   
-            idx.erase(idx.begin() + drawn_idx);
-            inv_cost_vec.erase(inv_cost_vec.begin() + drawn_idx);
-            sort_idx.push_back(idx_val);
-        }
-        // dist(g) should sample from the prob but
-        //std::sample(in.begin(), in.end(), std::back_inserter(out),
-        //                      5, std::mt19937{std::random_device{}()});   
-        std::vector<IntrusivePtr<State>> storage_copy(storage);
-
-        //std::cout << "cost/idx: ";
-        for (size_t i = 0; i < sz; i++) {
-            //std::cout << storage_copy[sort_idx[i]] -> cost;
-            storage[i] = storage_copy[sort_idx[i]];
-            //std::cout << "/" << sort_idx[i]
-            //     << ", ";
-        }
-        ///std::cout << std::endl;
-    }
-
     void clear() {
         for (size_t i = 0; i < sz; i++) {
             storage[i] = IntrusivePtr<State>{};
@@ -1093,16 +1395,13 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                                           int pass_idx,
                                           int num_passes,
                                           ProgressBar &tick,
-                                          std::unordered_set<uint64_t> &permitted_hashes,
-                                          std::map<const State*, double>& min_child_cost 
-                                          ) {
+                                          std::unordered_set<uint64_t> &permitted_hashes) {
 
     if (cost_model) {
         configure_pipeline_features(dag, params, cost_model);
     }
 
     StateQueue q, pending;
-
 
     // The initial state, with no decisions made
     {
@@ -1136,12 +1435,9 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
     string cyos_str = get_env_variable("HL_CYOS");
 
     // This loop is beam search over the sequence of decisions to make.
-
-    std::cout << "start decision " << std::endl;
     for (int i = 0;; i++) {
         std::unordered_map<uint64_t, int> hashes;
-        q.swap(pending); // queue into pending 
-
+        q.swap(pending);
 
         if (pending.empty()) {
             if ((false) && beam_size < 1000) {  // Intentional dead code. Extra parens to pacify clang-tidy.
@@ -1157,8 +1453,7 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                                              pass_idx,
                                              num_passes,
                                              tick,
-                                             permitted_hashes,
-                                             min_child_cost);
+                                             permitted_hashes);
             } else {
                 internal_error << "Ran out of legal states with beam size " << beam_size << "\n";
             }
@@ -1169,16 +1464,6 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
         }
 
         expanded = 0;
-
-        //string jenny_feature_file = get_env_variable("HL_JENNY_FEATURE_FILE");
-        //std::cout << "jenny_feature_file: " << jenny_feature_file << std::endl;
-        //internal_assert(!jenny_feature_file.empty());
-        //std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::trunc | std::ios::app);
-        //std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::ate | std::ios::app);
-
-        //size_t unique_id = 0;
-        // Beam search
-        std::cout << "start beam search " << i << std::endl;
         while (expanded < beam_size && !pending.empty()) {
 
             IntrusivePtr<State> state{pending.pop()};
@@ -1196,7 +1481,6 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                     // to how many states we've already seen with that
                     // hash.
                     int penalty = ++hashes[h1];
-                    // permitted_hashes stores the hash of good parent states, see line 1211
                     if (pass_idx > 0 && !permitted_hashes.count(h0)) {
                         // It's possible to get yourself into a state
                         // where the only things in the beam that match
@@ -1227,7 +1511,6 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
             }
 
             if (state->num_decisions_made == 2 * (int)dag.nodes.size()) {
-                std::cout << "JENNY finish beam search " << i << std::endl;
                 // We've reached the end of the pass. The first state
                 // must be the best, because we're pulling off a
                 // priority queue.
@@ -1238,61 +1521,16 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
                 // reasonable as having a cost no more than 20% higher
                 // than the cost of the best thing. Only do this if
                 // there are more coarse-to-fine passes yet to come.
-                std::cout << "JENNY pass_idx: " << pass_idx << " num_passes:" << num_passes << std::endl;
-                std::cout << "JENNY pending size: " << pending.size()  << std::endl;
                 if (pass_idx + 1 < num_passes) {
                     int blessed = 0;
                     while (state->cost <= 1.2 * best->cost && blessed < beam_size) {
                         const State *s = state.get();
-                        double best_child_cost = s->cost;
                         while (s) {
-                            std::cout << "JENNY blessed state parent" << i << std::endl;
                             uint64_t h1 = s->structural_hash(pass_idx);
                             permitted_hashes.insert(h1);
                             s = s->parent.get();
-                            if (s != NULL) {
-                                double parent_cost = s->cost;
-                                double min_cost = parent_cost; 
-                                if (min_cost > best_child_cost) {
-                                    min_cost = best_child_cost;
-                                }
-                                if (min_child_cost.find(s) == min_child_cost.end()) {
-                                    size_t unique_id = min_child_cost.size();
-                                    string jenny_feature_file = get_env_variable("HL_JENNY_DIR") + "/"+ std::to_string(unique_id) + ".featurization";
-                                    std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::trunc);
-                                    //std::cout << "min_child_cost: " << min_child_cost.size() << ", unique_id: " << unique_id << std::endl;
-
-                                    //internal_assert(min_child_cost.size() == unique_id);
-                                    // if (min_cost <= 0) {
-                                    //     min_cost = 1;
-                                    // }
-
-                                    // assert(min_cost > 0);
-                                    min_child_cost.emplace(s, min_cost);
-                                    State* s_ptr = const_cast<State *>(s);
-                                    s_ptr->save_featurization(dag, params, binfile);
-
-                                    internal_assert(!binfile.fail()) << "Failed to write " << jenny_feature_file;
-                                    binfile.close();
-                                        
-                                } else {
-                                    double parent_min_cost = min_child_cost[s];
-                                    if (min_cost > parent_min_cost) {
-                                        min_cost = parent_min_cost;
-                                    }
-
-                                    //if (min_cost <= 0) {
-                                    //    min_cost = 1;
-                                    //}
-                                    //assert(min_cost > 0);
-                                    min_child_cost[s] = min_cost;
-                                    //State* s_ptr = const_cast<State *>(s);
-                                    //s_ptr->save_featurization(dag, params, binfile);
-                                }
-                            }
                         }
                         if (pending.empty()) break;
-                        // pop new state 
                         state = pending.pop();
                         blessed++;
                     }
@@ -1304,15 +1542,14 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
             state->generate_children(dag, params, cost_model, enqueue_new_children);
             expanded++;
         }
-        //binfile.close();
+
         // Drop the other states unconsidered.
         pending.clear();
 
         if (cost_model) {
             // Now evaluate all the costs and re-sort them in the priority queue
             cost_model->evaluate_costs();
-            //q.resort();
-            q.prob_resort();
+            q.resort();
         }
 
         if (cyos_str == "1") {
@@ -1330,7 +1567,6 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
             cost_model->evaluate_costs();
 
             // Select next partial schedule to expand.
-            // cin user selected node
             int selection = -1;
             while (selection < 0 || selection >= (int)q.size()) {
                 aslog(0) << "\nEnter selection: ";
@@ -1345,15 +1581,100 @@ IntrusivePtr<State> optimal_schedule_pass(FunctionDAG &dag,
     }
 }
 
+IntrusivePtr<State> optimal_mcts_schedule(FunctionDAG &dag,
+                                     vector<Function> outputs,
+                                     const MachineParams &params,
+                                     CostModel *cost_model,
+                                     std::mt19937 &rng,
+                                     int beam_size) {
+
+    if (cost_model) {
+        configure_pipeline_features(dag, params, cost_model);
+    }
+    IntrusivePtr<State> best;
+
+    std::unordered_set<uint64_t> permitted_hashes;
+
+    // If the beam size is one, it's pointless doing multiple passes.
+    //int num_passes = (beam_size == 1) ? 1 : 5;
+
+    // not sure why would I need num_passes, but keeping it just in case
+    int num_passes = 5;
+
+    string cyos_str = get_env_variable("HL_CYOS");
+    if (cyos_str == "1") {
+        // If the user is manually navigating the search space, don't
+        // ask them to do more than one pass.
+        num_passes = 1;
+    }
+
+    string num_passes_str = get_env_variable("HL_NUM_PASSES");
+    if (!num_passes_str.empty()) {
+        // The user has requested a non-standard number of passes.
+        num_passes = std::atoi(num_passes_str.c_str());
+    }
+
+    IntrusivePtr<State> initial{new State};
+    initial->root = new LoopNest;
+
+    State::WrapperState state(initial, num_passes, dag, params, cost_model);
+
+    msa::mcts::UCT<State::WrapperState, State::Action> uct; // Templated class. Builds a partial decision tree and searches it with UCT MCTS
+
+    // OPTIONAL init uct params
+    uct.uct_k = 1.41421356237;//sqrt(2);
+    uct.max_millis = 0;
+    uct.max_iterations = 100;
+    uct.simulation_depth = num_passes;
+
+    for (int i = 0; i < num_passes; i++) {
+        ProgressBar tick;
+
+        // run uct mcts on current state and get best action
+        State::Action action = uct.run(state);
+        //std::cout << "prefinished pass " << i << std::endl;
+
+        // apply the action to the current state
+        state.apply_action(action);
+        state.evaluate();
+        auto pass = state.inner; 
+        //std::cout << "finished pass " << i << std::endl;
+        //std::cout << "Pass " << i << " of " << num_passes << ", cost: " << pass->cost << std::endl;
+         
+        tick.clear();
+
+        if (aslog::aslog_level() == 0) {
+            aslog(0) << "Pass " << i << " of " << num_passes << ", cost: " << pass->cost << "\n";
+        } else {
+            aslog(0) << "Pass " << i << " result: ";
+            pass->dump();
+        }
+        
+        if (i == 0) {
+            // Track which pass produced the lowest-cost state. It's
+            // not necessarily the final one.
+            best = pass;
+            continue;
+        }
+        if (pass->cost < best->cost) {
+            // Track which pass produced the lowest-cost state. It's
+            // not necessarily the final one.
+            best = pass;
+        }
+    }
+
+    aslog(0) << "Best cost: " << best->cost << "\n";
+    
+
+    return state.inner;
+}
 // Performance coarse-to-fine beam search and return the best state found.
 IntrusivePtr<State> optimal_schedule(FunctionDAG &dag,
                                      vector<Function> outputs,
                                      const MachineParams &params,
                                      CostModel *cost_model,
                                      std::mt19937 &rng,
-                                     int beam_size,
-                                     std::map<const State*, double>& min_child_cost 
-                                     ) {
+                                     int beam_size) {
 
     IntrusivePtr<State> best;
 
@@ -1378,9 +1699,8 @@ IntrusivePtr<State> optimal_schedule(FunctionDAG &dag,
     for (int i = 0; i < num_passes; i++) {
         ProgressBar tick;
 
-        // pass is a State *
         auto pass = optimal_schedule_pass(dag, outputs, params, cost_model,
-                                          rng, beam_size, i, num_passes, tick, permitted_hashes, min_child_cost);
+                                          rng, beam_size, i, num_passes, tick, permitted_hashes);
 
         tick.clear();
 
@@ -1402,24 +1722,12 @@ IntrusivePtr<State> optimal_schedule(FunctionDAG &dag,
 
     return best;
 }
-
-// The main entrypoint to generate a schedule for a pipeline.
-void generate_schedule(const std::vector<Function> &outputs,
+// the entry point to generate a schedule with mcts.
+void generate_rl_schedule(const std::vector<Function> &outputs,
                        const Target &target,
                        const MachineParams &params,
                        AutoSchedulerResults *auto_scheduler_results) {
-    aslog(0) << "generate_schedule for target=" << target.to_string() << "\n";
-    //std::cout << "jenny_feature_file: " << jenny_feature_file << std::endl;
-    //if (!jenny_feature_file.empty()) {
-    //    std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::trunc);
-    //    binfile.close();
-    //}
-
-    string jenny_dir = get_env_variable("HL_JENNY_DIR");
-    internal_assert(!jenny_dir.empty());
-        
-    rmdir(jenny_dir.c_str());
-    _mkdir(jenny_dir.c_str());
+    aslog(0) << "generate_rl_schedule for target=" << target.to_string() << "\n";
 
     // Start a timer
     HALIDE_TIC;
@@ -1445,7 +1753,6 @@ void generate_schedule(const std::vector<Function> &outputs,
     }
 
     string weights_in_path = get_env_variable("HL_WEIGHTS_DIR");
-    std::cout << "weights_in_path: " << weights_in_path << std::endl;
     string weights_out_path;  // deliberately empty
 
     string randomize_weights_str = get_env_variable("HL_RANDOMIZE_WEIGHTS");
@@ -1465,11 +1772,8 @@ void generate_schedule(const std::vector<Function> &outputs,
 
     IntrusivePtr<State> optimal;
 
-    std::cout << "generate_schedule" << std::endl;
-    // JENNY add min_child_cost dict 
-    std::map<const State*, double> min_child_cost; 
     // Run beam search
-    optimal = optimal_schedule(dag, outputs, params, cost_model.get(), rng, beam_size, min_child_cost);
+    optimal = optimal_mcts_schedule(dag, outputs, params, cost_model.get(), rng, beam_size);
 
     HALIDE_TOC;
 
@@ -1477,7 +1781,6 @@ void generate_schedule(const std::vector<Function> &outputs,
 
     // Dump the schedule found
     aslog(1) << "** Optimal schedule:\n";
-    optimal->debug_dump();
 
     // Just to get the debugging prints to fire
     optimal->calculate_cost(dag, params, cost_model.get(), aslog::aslog_level() > 0);
@@ -1502,42 +1805,112 @@ void generate_schedule(const std::vector<Function> &outputs,
         internal_assert(!f.fail()) << "Failed to write " << schedule_file;
     }
 
-    //Save the features for min_cost 
-    //std::cout << "jenny_mincost_file: " << jenny_mincost_file << std::endl;
+    // Save the featurization, so that we can use this schedule as
+    // training data (once we've benchmarked it).
+    string feature_file = get_env_variable("HL_FEATURE_FILE");
+    if (!feature_file.empty()) {
+        user_warning << "HL_FEATURE_FILE is deprecated; use the featurization output from Generator instead\n";
+        std::ofstream binfile(feature_file, std::ios::binary | std::ios_base::trunc);
+        optimal->save_featurization(dag, params, binfile);
+        binfile.close();
+        internal_assert(!binfile.fail()) << "Failed to write " << feature_file;
+    }
 
-    //if (!jenny_mincost_file.empty()) {
-        //std::ofstream binfile(jenny_feature_file, std::ios::binary | std::ios_base::trunc | std::ios::app);
-        //std::ofstream mincostfile(jenny_mincost_file, std::ios_base::out | std::ios_base::trunc);
-        //mincostfile.open(jenny_mincost_file);
-        std::cout << "min_child_cost.size: " << min_child_cost.size() << std::endl;
-        std::cout <<  "item.second min cost: " << std::endl; 
-        int idx = 0;
-        //for (auto &item: min_child_cost) {
-        //    State* s_ptr = const_cast<State *>(item.first);
-        //    s_ptr->save_featurization(dag, params, binfile);
-        //    std::cout << "sample " << i++ << " , cost: " << item.second << std::endl;
-        //    mincostfile << item.second << std::endl;
-        //}
-        auto it = min_child_cost.begin();
-        while(it != min_child_cost.end()) {
-            //State* s_ptr = const_cast<State *>(it->first);
-            //s_ptr->save_featurization(dag, params, binfile);
-            string jenny_mincost_file = get_env_variable("HL_JENNY_DIR") + "/" + std::to_string(idx) + ".txt";
-            std::ofstream mincostfile(jenny_mincost_file, std::ios::binary | std::ios_base::trunc);
-
-            std::cout << "sample " << idx << " , cost: " << it->second << std::endl;
-            mincostfile << it->second << std::endl;
-            mincostfile.close();
-            idx ++;
-            it ++;
-
+    if (auto_scheduler_results) {
+        auto_scheduler_results->scheduler_name = "Adams2019";
+        auto_scheduler_results->schedule_source = optimal->schedule_source;
+        {
+            std::ostringstream out;
+            optimal->save_featurization(dag, params, out);
+            auto_scheduler_results->featurization.resize(out.str().size());
+            memcpy(auto_scheduler_results->featurization.data(), out.str().data(), out.str().size());
         }
-        //binfile.close();
-        //mincostfile.close();
-        //internal_assert(!binfile.fail()) << "Failed to write " << jenny_feature_file;
-    //}
+    }
+}
 
 
+// The main entrypoint to generate a schedule for a pipeline.
+void generate_schedule(const std::vector<Function> &outputs,
+                       const Target &target,
+                       const MachineParams &params,
+                       AutoSchedulerResults *auto_scheduler_results) {
+    aslog(0) << "generate_schedule for target=" << target.to_string() << "\n";
+
+    // Start a timer
+    HALIDE_TIC;
+
+    State::cost_calculations = 0;
+
+    // Get the seed for random dropout
+    string seed_str = get_env_variable("HL_SEED");
+    // Or use the time, if not set.
+    int seed = (int)time(NULL);
+    if (!seed_str.empty()) {
+        seed = atoi(seed_str.c_str());
+    }
+    aslog(1) << "Dropout seed = " << seed << "\n";
+    std::mt19937 rng((uint32_t)seed);
+
+    // Get the beam size
+    string beam_size_str = get_env_variable("HL_BEAM_SIZE");
+    // Defaults to 32
+    size_t beam_size = 32;
+    if (!beam_size_str.empty()) {
+        beam_size = atoi(beam_size_str.c_str());
+    }
+
+    string weights_in_path = get_env_variable("HL_WEIGHTS_DIR");
+    string weights_out_path;  // deliberately empty
+
+    string randomize_weights_str = get_env_variable("HL_RANDOMIZE_WEIGHTS");
+    bool randomize_weights = randomize_weights_str == "1";
+
+    // Analyse the Halide algorithm and construct our abstract representation of it
+    FunctionDAG dag(outputs, params, target);
+    if (aslog::aslog_level() > 0) {
+        dag.dump();
+    }
+
+    // Construct a cost model to use to evaluate states. Currently we
+    // just have the one, but it's an abstract interface, so others
+    // can be slotted in for experimentation.
+    std::unique_ptr<CostModel> cost_model = make_default_cost_model(weights_in_path, weights_out_path, randomize_weights);
+    internal_assert(cost_model != nullptr);
+
+    IntrusivePtr<State> optimal;
+
+    // Run beam search
+    optimal = optimal_schedule(dag, outputs, params, cost_model.get(), rng, beam_size);
+
+    HALIDE_TOC;
+
+    aslog(1) << "Cost evaluated this many times: " << State::cost_calculations << "\n";
+
+    // Dump the schedule found
+    aslog(1) << "** Optimal schedule:\n";
+
+    // Just to get the debugging prints to fire
+    optimal->calculate_cost(dag, params, cost_model.get(), aslog::aslog_level() > 0);
+
+    // Apply the schedules to the pipeline
+    optimal->apply_schedule(dag, params);
+
+    // Print out the schedule
+    if (aslog::aslog_level() > 0) {
+        optimal->dump();
+    }
+
+    string schedule_file = get_env_variable("HL_SCHEDULE_FILE");
+    if (!schedule_file.empty()) {
+        user_warning << "HL_SCHEDULE_FILE is deprecated; use the schedule output from Generator instead\n";
+        aslog(1) << "Writing schedule to " << schedule_file << "...\n";
+        std::ofstream f(schedule_file);
+        f << "// --- BEGIN machine-generated schedule\n"
+          << optimal->schedule_source
+          << "// --- END machine-generated schedule\n";
+        f.close();
+        internal_assert(!f.fail()) << "Failed to write " << schedule_file;
+    }
 
     // Save the featurization, so that we can use this schedule as
     // training data (once we've benchmarked it).
@@ -1571,12 +1944,13 @@ struct RegisterAutoscheduler {
         Pipeline::add_autoscheduler("Adams2019", *this);
     }
 
-    void operator()(Pipeline p, const Target &target, const MachineParams &params, AutoSchedulerResults *results) {
+    void operator()(const Pipeline &p, const Target &target, const MachineParams &params, AutoSchedulerResults *results) {
         std::vector<Function> outputs;
         for (Func f : p.outputs()) {
             outputs.push_back(f.function());
         }
-        Autoscheduler::generate_schedule(outputs, target, params, results);
+        Autoscheduler::generate_rl_schedule(outputs, target, params, results);
+        //Autoscheduler::generate_schedule(outputs, target, params, results);
     }
 } register_auto_scheduler;
 
@@ -1589,11 +1963,8 @@ void find_and_apply_schedule(FunctionDAG &dag,
                              StageMap<ScheduleFeatures> *schedule_features) {
 
     std::mt19937 rng(12345);
-    // JENNY add min_child_cost dict 
-    std::map<const State*, double> min_child_cost; 
-
-    std::cout << "find_and_apply_schedule" << std::endl;
-    IntrusivePtr<State> optimal = optimal_schedule(dag, outputs, params, cost_model, rng, beam_size, min_child_cost);
+    IntrusivePtr<State> optimal = optimal_mcts_schedule(dag, outputs, params, cost_model, rng, beam_size);
+    //IntrusivePtr<State> optimal = optimal_schedule(dag, outputs, params, cost_model, rng, beam_size);
 
     // Apply the schedules
     optimal->apply_schedule(dag, params);
