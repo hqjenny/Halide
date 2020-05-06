@@ -193,7 +193,9 @@ struct LoopNest {
                                                                const LoopNest *parent,
                                                                const MachineParams &params,
                                                                int v,
-                                                               bool in_realization) const;
+                                                               bool in_realization,
+                                                               int depth
+                                                               ) const;
 
     // Below here we have methods that apply a schedule to a Halide pipeline.
 

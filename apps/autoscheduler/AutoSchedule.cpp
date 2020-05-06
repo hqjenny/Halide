@@ -534,7 +534,10 @@ struct State {
 
             // 2) Realize it somewhere
             for (int vector_dim : vector_dims) {
-                auto tile_options = root->compute_in_tiles(node, nullptr, params, vector_dim, false);
+                int depth = 0; 
+                std::cout << "---------JENNY start compute_in_tiles -----------"<< std::endl;
+                auto tile_options = root->compute_in_tiles(node, nullptr, params, vector_dim, false, depth);
+                std::cout << "---------JENNY tile_options " << tile_options.size() << "-----------"<< std::endl;
                 for (IntrusivePtr<const LoopNest> &n : tile_options) {
                     auto child = make_child();
                     child->root = std::move(n);
@@ -1034,7 +1037,10 @@ struct State {
             // 2) Realize it somewhere
             //std::cout << "vector_dims: " <<vector_dims.size() << std::endl;
             for (int vector_dim : vector_dims) {
-                auto tile_options = root->compute_in_tiles(node, nullptr, params, vector_dim, false);
+                int depth = 0; 
+                std::cout << "---------JENNY start compute_in_tiles -----------"<< std::endl;
+                auto tile_options = root->compute_in_tiles(node, nullptr, params, vector_dim, false, depth);
+                std::cout << "---------JENNY tile_options " << tile_options.size() << "-----------"<< std::endl;
                 //std::cout << "vector value: " <<vector_dim <<" tile_options size: "<< tile_options.size()<< std::endl;
                 for (IntrusivePtr<const LoopNest> &n : tile_options) {
                     auto child = make_child();
@@ -1730,7 +1736,7 @@ IntrusivePtr<State> optimal_mcts_schedule(
 
     for (int j = 0; j < mcts_depth-1; j++) {
         
-        #pragma omp parallel for
+        //#pragma omp parallel for
         for (int i = 0; i < num_passes; i++) {
             if (done[i]) continue;
 
@@ -1787,7 +1793,7 @@ IntrusivePtr<State> optimal_mcts_schedule(
         // get the index of the best acton from the original vector of possible actions.
         int best_action_idx = actions[idx].index;
         // apply this action globally
-        #pragma omp parallel for
+        //#pragma omp parallel for
         for (int i = 0; i < num_passes; i++) {
             std::vector<State::Action> vactions;
             states[i].get_actions(vactions);

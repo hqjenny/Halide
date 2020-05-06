@@ -1319,10 +1319,19 @@ vector<IntrusivePtr<const LoopNest>> LoopNest::compute_in_tiles(const FunctionDA
                                                                 const LoopNest *parent,
                                                                 const MachineParams &params,
                                                                 int v,
-                                                                bool in_realization) const {
+                                                                bool in_realization,
+                                                                int depth
+                                                                ) const {
     internal_assert(f);
+    std::cout << "JENNY cur_depth: " << depth << std::endl;
 
     vector<IntrusivePtr<const LoopNest>> result;
+    int max_depth = 8;
+    if (depth > max_depth) {
+        std::cout << "JENNY max depth " << max_depth << " reached!" << std::endl;
+        return result;
+    }
+    depth += 1;
 
     // Some pruning to not waste time on terrible states
     if (parent) {
@@ -1480,7 +1489,7 @@ vector<IntrusivePtr<const LoopNest>> LoopNest::compute_in_tiles(const FunctionDA
                 // don't have to worry about the constraints this
                 // places on parallelism, as we forced all the
                 // parallelism to the outer loop.
-                auto opts = inner->compute_in_tiles(f, outer, params, v, true);
+                auto opts = inner->compute_in_tiles(f, outer, params, v, true, depth);
                 for (IntrusivePtr<const LoopNest> &n : opts) {
                     LoopNest *store_at_outer_compute_further_in = new LoopNest;
                     store_at_outer_compute_further_in->copy_from(*outer);
@@ -1536,7 +1545,8 @@ vector<IntrusivePtr<const LoopNest>> LoopNest::compute_in_tiles(const FunctionDA
                 // Don't fuse into serial loops, or we could never parallelize this Func.
                 continue;
             }
-            auto opts = children[child]->compute_in_tiles(f, this, params, v, store_here);
+
+            auto opts = children[child]->compute_in_tiles(f, this, params, v, store_here, depth);
             for (IntrusivePtr<const LoopNest> &n : opts) {
                 // (Only valid if one child calls f) Push the
                 // computation into the child. Possibly leaving
@@ -1553,6 +1563,8 @@ vector<IntrusivePtr<const LoopNest>> LoopNest::compute_in_tiles(const FunctionDA
         }
     }
 
+    std::cout << "JENNY compute_in_tiles size: " << result.size() << std::endl;
+    std::cout << "JENNY depth: " << depth - 1 << std::endl;
     return result;
 }
 
