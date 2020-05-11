@@ -34,7 +34,18 @@ autotune: $(GENERATOR_BIN)/demo.generator $(AUTOSCHED_BIN)/featurization_to_samp
 		$(HALIDE_DISTRIB_PATH) \
 		$(AUTOSCHED_SAMPLES_OUT)
 
-autotune_deps: $(AUTOSCHED_BIN)/featurization_to_sample $(AUTOSCHED_BIN)/get_host_target $(AUTOSCHED_BIN)/retrain_cost_model $(AUTOSCHED_BIN)/libauto_schedule.so
+
+autotune_jenny: $(GENERATOR_BIN)/demo.generator $(AUTOSCHED_BIN)/featurization_to_sample $(AUTOSCHED_BIN)/get_host_target $(AUTOSCHED_BIN)/retrain_cost_model_jenny $(AUTOSCHED_BIN)/libauto_schedule.so $(AUTOSCHED_SRC)/autotune_loop_jenny.sh
+	bash $(AUTOSCHED_SRC)/autotune_loop_jenny.sh \
+		$(GENERATOR_BIN)/demo.generator \
+		demo \
+		"" \
+		$(AUTOSCHED_SRC)/baseline.weights \
+		$(AUTOSCHED_BIN) \
+		$(HALIDE_DISTRIB_PATH) \
+		$(AUTOSCHED_SAMPLES_OUT)
+
+autotune_deps: $(AUTOSCHED_BIN)/featurization_to_sample $(AUTOSCHED_BIN)/get_host_target $(AUTOSCHED_BIN)/retrain_cost_model $(AUTOSCHED_BIN)/libauto_schedule.so $(AUTOSCHED_BIN)/featurization_to_sample_jenny $(AUTOSCHED_BIN)/retrain_cost_model_jenny 
 
 $(BIN)/test_perfect_hash_map: test_perfect_hash_map.cpp PerfectHashMap.h
 	@mkdir -p $(@D)
@@ -76,8 +87,10 @@ build: $(BIN)/$(HL_TARGET)/test \
 	$(BIN)/$(HL_TARGET)/included_schedule_file.rungen \
 	$(GENERATOR_BIN)/demo.generator \
 	$(AUTOSCHED_BIN)/featurization_to_sample \
+	$(AUTOSCHED_BIN)/featurization_to_sample_jenny \
 	$(AUTOSCHED_BIN)/get_host_target \
 	$(AUTOSCHED_BIN)/retrain_cost_model \
+	$(AUTOSCHED_BIN)/retrain_cost_model_jenny \
 	$(AUTOSCHED_BIN)/libauto_schedule.so
 
 test: run_test test_perfect_hash_map test_function_dag demo included_schedule_file autotune

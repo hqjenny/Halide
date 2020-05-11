@@ -31,6 +31,7 @@ export HL_RANDOM_DROPOUT=100
 # export HL_NUM_PASSES=5
 
 if [ "$autoscheduler" == "greedy" ]; then
+    cp ../autotune_loop-master.sh ../autotune_loop.sh
     if diff ../AutoSchedule-master.cpp ../AutoSchedule.cpp > /dev/null ; then
         echo "No need to copy AutoSchedule-master.cpp"
     else
@@ -41,6 +42,7 @@ if [ "$autoscheduler" == "greedy" ]; then
     export HL_BEAM_SIZE=1
     export HL_NUM_PASSES=1
 elif [ "$autoscheduler" == "beam" ]; then
+    cp ../autotune_loop-master.sh ../autotune_loop.sh
     if diff ../AutoSchedule-master.cpp ../AutoSchedule.cpp > /dev/null ; then
         echo "No need to copy AutoSchedule-master.cpp"
     else
@@ -50,7 +52,19 @@ elif [ "$autoscheduler" == "beam" ]; then
     # beam search
     export HL_BEAM_SIZE=32
     export HL_NUM_PASSES=5
+elif [ "$autoscheduler" == "beam-jenny" ]; then
+    cp ../autotune_loop-jenny.sh ../autotune_loop.sh
+    if diff ../AutoSchedule-jenny.cpp ../AutoSchedule.cpp > /dev/null ; then
+        echo "No need to copy AutoSchedule-master.cpp"
+    else
+        cp ../AutoSchedule-jenny.cpp ../AutoSchedule.cpp
+    fi
+
+    # beam search
+    export HL_BEAM_SIZE=32
+    export HL_NUM_PASSES=5
 elif [ "$autoscheduler" == "mcts" ]; then
+    cp ../autotune_loop-master.sh ../autotune_loop.sh
     if diff ../AutoSchedule-mcts.cpp ../AutoSchedule.cpp > /dev/null ; then
         echo "No need to copy AutoSchedule-mcts.cpp"
     else
@@ -91,7 +105,9 @@ fi
 
 # APPS="resnet_50_blockwise bgu bilateral_grid local_laplacian nl_means lens_blur camera_pipe stencil_chain harris hist max_filter unsharp interpolate_generator conv_layer mat_mul_generator iir_blur_generator"
 
-APPS="bilateral_grid local_laplacian nl_means lens_blur camera_pipe stencil_chain harris hist max_filter unsharp interpolate conv_layer iir_blur bgu" # Missing mat_mul_generator and resnet_50_blockwise
+#APPS="bilateral_grid local_laplacian nl_means lens_blur camera_pipe stencil_chain harris hist max_filter unsharp interpolate conv_layer iir_blur bgu" # Missing mat_mul_generator and resnet_50_blockwise
+APPS="bilateral_grid" 
+#APPS="local_laplacian"
 
 for app in $APPS; do
     echo "$app ($autoscheduler) (retrain=$RETRAIN)" >> autoprogress
@@ -113,13 +129,15 @@ for app in $APPS; do
     if [ -d "${HALIDE}/apps/${app}/samples" ]; then
         i=0
         while [ -d "${HALIDE}/apps/${app}/old_samples_$i" ]; do
+            rm -rf "${HALIDE}/apps/${app}/old_samples_$i"
             i=$((i+1))
         done
-        mv "${HALIDE}/apps/${app}/samples" "${HALIDE}/apps/${app}/old_samples_$i"
+        #mv "${HALIDE}/apps/${app}/samples" "${HALIDE}/apps/${app}/old_samples_$i"
+        rm -rf "${HALIDE}/apps/${app}/samples" 
     fi
 
     if [ "$RETRAIN" == "true" ]; then
-        MAX_SECONDS=10800 # 3 hours
+        MAX_SECONDS=600 # 3 hours
     else
         MAX_SECONDS=600 # 10 minutes
     fi
@@ -140,8 +158,14 @@ for app in $APPS; do
             export HL_WEIGHTS_DIR="$PWD/../../${app}/samples/updated.weights"
         fi
 
+
+#        if [ "$autoscheduler" == "beam-jenny" ]; then
+#            # Run the autotuning script
+#            make -C ${HALIDE}/apps/${app} autotune_jenny
+#        else
         # Run the autotuning script
         make -C ${HALIDE}/apps/${app} autotune
+#        fi
 
         # Check if the program autotuned correctly
         if [ $? -ne 0 ]; then
