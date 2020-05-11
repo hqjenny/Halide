@@ -530,7 +530,11 @@ struct State {
 
             // 2) Realize it somewhere
             for (int vector_dim : vector_dims) {
-                auto tile_options = root->compute_in_tiles(node, nullptr, params, vector_dim, false);
+                std::cout << "---------JENNY start compute_in_tiles -----------"<< std::endl;
+                int depth = 0;
+                auto tile_options = root->compute_in_tiles(node, nullptr, params, vector_dim, false, depth);
+                std::cout << "---------JENNY tile_options " << tile_options.size() << "-----------"<< std::endl;
+                //auto tile_options = root->compute_in_tiles(node, nullptr, params, vector_dim, false);
                 for (IntrusivePtr<const LoopNest> &n : tile_options) {
                     auto child = make_child();
                     child->root = std::move(n);

@@ -1,11 +1,12 @@
 import re
 
-postfix = ['1', '2', '3', '4', '5', '6', '7', '8', '10']
+#postfix = ['1', '2', '3', '4', '5', '6', '7', '8', '10', 'may_slide1', 'may_slide2', 'may_slide12']
+postfix = ['1', '2', '3', '10', 'may_slide1', 'may_slide2', 'may_slide12']
 #postfix = ['1']
-print("depth\t#options\tManually-tuned\tMCTS-tuned")
+print("depth\t#options\tManually-tuned\tBEAM-tuned")
 for p in postfix:
     #print('parse '+ 'mcts_'+p)
-    with open('mcts_'+p,'r') as f:
+    with open('bs_'+p,'r') as f:
         data = f.readlines()
     total_options = 0
     manual_time =  -1
