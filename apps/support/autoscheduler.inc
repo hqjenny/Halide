@@ -82,7 +82,26 @@ $(AUTOSCHED_BIN)/retrain_cost_model: $(AUTOSCHED_SRC)/retrain_cost_model.cpp \
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -frtti -Wall -I ../support -I $(AUTOSCHED_BIN)/cost_model $(OPTIMIZE) $(filter-out %.h,$^) -o $@ $(LIBHALIDE_LDFLAGS) $(USE_OPEN_MP)
 
+
+$(AUTOSCHED_BIN)/retrain_cost_model_jenny: $(AUTOSCHED_SRC)/retrain_cost_model_jenny.cpp \
+									$(AUTOSCHED_SRC)/ASLog.cpp \
+									$(AUTOSCHED_SRC)/DefaultCostModel.h \
+									$(AUTOSCHED_SRC)/DefaultCostModel.cpp \
+									$(AUTOSCHED_SRC)/Weights.h \
+									$(AUTOSCHED_SRC)/Weights.cpp \
+									$(AUTOSCHED_SRC)/CostModel.h \
+									$(AUTOSCHED_SRC)/NetworkSize.h \
+									$(AUTOSCHED_COST_MODEL_LIBS) \
+									$(AUTOSCHED_WEIGHT_OBJECTS) \
+									$(AUTOSCHED_BIN)/auto_schedule_runtime.a
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) -frtti -Wall -I ../support -I $(AUTOSCHED_BIN)/cost_model $(OPTIMIZE) $(filter-out %.h,$^) -o $@ $(LIBHALIDE_LDFLAGS) $(USE_OPEN_MP)
+
 $(AUTOSCHED_BIN)/featurization_to_sample: $(AUTOSCHED_SRC)/featurization_to_sample.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $< $(OPTIMIZE) -o $@
+
+$(AUTOSCHED_BIN)/featurization_to_sample_jenny: $(AUTOSCHED_SRC)/featurization_to_sample_jenny.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $< $(OPTIMIZE) -o $@
 
